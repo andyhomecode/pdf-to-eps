@@ -43,6 +43,7 @@ sudo dnf install poppler-utils python3
 ### 1. Install System Dependencies
 ```bash
 sudo apt-get install poppler-utils python3
+sudo apt install avahi-daemon avahi-utils
 ```
 
 ### 2. Copy Filter to CUPS
@@ -125,13 +126,19 @@ sudo lpadmin -p thermal-receipt -E -v file:/dev/null -P /usr/share/cups/model/th
 # Or for a real printer (USB example)
 sudo lpadmin -p thermal-receipt -E -v usb://EPSON/TM-T20II -P /usr/share/cups/model/thermal-receipt.ppd
 
-# Or for network printer
-sudo lpadmin -p thermal-receipt -E -v socket://192.168.1.100:9100 -P /usr/share/cups/model/thermal-receipt.ppd
+# Or for network printer -- that's what I'm using for my Epson, others untested
+sudo lpadmin -p thermal-receipt -E -v socket://192.168.1.16:9100 -P /usr/share/cups/model/thermal-receipt.ppd
 ```
 
 ### 5. Restart CUPS
 ```bash
+
+sudo cupsctl --share-printers --remote-any --remote-admin
 sudo systemctl restart cups
+ss -lntp | grep 631
+sudo systemctl enable --now avahi-daemon
+avahi-browse -a | grep Printer
+
 ```
 
 ## Configuration
@@ -309,4 +316,3 @@ For issues and questions:
 1. Check the troubleshooting section
 2. Review CUPS error logs
 3. Test the filter directly from command line
-4. Open an issue with full error details
