@@ -261,8 +261,9 @@ class TestLayout(unittest.TestCase):
         self.assertEqual(text.count("[B]"), 2)
 
     def test_webpage(self):
-        # Few words per line on the 80mm page, as iPhone prints web pages
-        text = preview(WEBPAGE_PDF, "PrintTitle=false")
+        # Few words per line on the 80mm page, as iPhone prints web pages,
+        # reflowed when PrintMode=Text asks for it
+        text = preview(WEBPAGE_PDF, "PrintTitle=false PrintMode=Text")
         self.assertIn("[B]Citizens Air Complaint Program\n", text)  # tight leading kept in order
         self.assertIn("Idling emissions from gasoline and diesel motor\nvehicle engines", text)
         # The second paragraph runs onto page 2 ("in our complaint program...")
@@ -326,11 +327,32 @@ class TestImages(unittest.TestCase):
         self.assertIn("[IMG 576x176]", text)
 
     def test_print_mode(self):
+        # A4 pages are laid out as text in Auto; Image prints them as drawn
         self.assertIn("[IMG 576x", preview(RECEIPT_PDF, "PrintMode=Image"))
         self.assertNotIn("[IMG", preview(RECEIPT_PDF))
-        text = preview(PHOTO_PDF, "PrintMode=Text")
-        self.assertNotIn("[IMG", text)
-        self.assertIn("This PDF has no text", text)
+        # Pages without text print as images even when laying out text
+        self.assertIn("[IMG 576x256]", preview(PHOTO_PDF, "PrintMode=Text"))
+
+    def test_receipt_width_pages_print_as_drawn(self):
+        # An 80mm-wide page was laid out for the paper (iPhone, Mac): printed
+        # as drawn, the page width mapped onto the 576 dots, no title
+        text = preview(WEBPAGE_PDF)
+        self.assertNotIn("Citizens", text)
+        self.assertRegex(text, r"^\[INIT\]\[FONT A\]\[LINESPACE default\]\[CODEPAGE 0\]\[IMG 576x")
+        self.assertEqual(preview(WEBPAGE_PDF, "PrintMode=Text").count("[IMG"), 0)
+
+    def test_as_drawn_page_is_sharp_and_full_width(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ESCPOS_")}
+        out = subprocess.run([sys.executable, FILTER, "1", "a", "t", "1", "", WEBPAGE_PDF],
+                             capture_output=True, env=env, timeout=60).stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            escpos_preview.Decoder(out, "cp437", tmp).run()
+            first = f.Image.open(os.path.join(tmp, "image01.png")).convert("L")
+        # The heading starts at the page's own left margin (18 of 227pt), not cropped to the edge
+        left = f.ImageOps.invert(first).getbbox()[0]
+        self.assertAlmostEqual(left, 18 / 227 * 576, delta=6)
+        # Text is thresholded: pure black and white, no dither speckle
+        self.assertEqual(set(first.getdata()), {0, 255})
 
     def test_jpeg_input_prints_whole_upright(self):
         # Stored 300x400 sideways with EXIF orientation 6: prints 400x300 upright, scaled to 576

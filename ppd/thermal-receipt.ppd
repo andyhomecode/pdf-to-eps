@@ -54,9 +54,9 @@
 
 *OpenUI *PrintMode/Print Mode: PickOne
 *DefaultPrintMode: Auto
-*PrintMode Auto/Automatic (pages without text print as images): ""
-*PrintMode Text/Text only: ""
-*PrintMode Image/Image only: ""
+*PrintMode Auto/Automatic (receipt-width pages as drawn, others as text): ""
+*PrintMode Text/Text (reflow to the paper width): ""
+*PrintMode Image/As drawn (every page as an image): ""
 *CloseUI: *PrintMode
 
 *OpenUI *Dither/Image Dithering: PickOne

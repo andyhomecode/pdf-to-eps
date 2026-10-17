@@ -37,6 +37,8 @@ PROFILES = {
         "cols_58mm": 35,     # 58mm roll, Font A, per Epson spec
         "dots": 576,         # print width in dots on 80mm paper (203 dpi)
         "dots_58mm": 416,    # 58mm paper, rounded down to a whole byte
+        "paper_pt": 226.77,  # 80mm paper width in points
+        "paper_58mm_pt": 164.41,
         "image_gamma": 0.8,  # lighten midtones; thermal dots spread a little
         "codepages": {
             "cp437": ("cp437", 0),     # PC437 USA
@@ -58,6 +60,10 @@ ENV_OPTIONS = {
 }
 
 MAX_COPIES = 100
+# auto: pages already the paper's width (iPhone, Mac) print as drawn, other
+#       pages are laid out as text, pages without text print as images
+# text: lay out every page as text (reflowed to the paper width)
+# image: print every page as drawn
 PRINT_MODES = ("auto", "text", "image")
 DITHER_METHODS = ("auto", "atkinson", "floyd-steinberg", "threshold")
 DENSE_LINE_SPACING = False  # set True for tighter lines on long receipts
@@ -103,6 +109,7 @@ class Settings:
     copies: int
     print_title: bool
     dots: int           # image width in dots
+    paper_pt: float     # paper width in points (a PDF page this wide was laid out for it)
     print_mode: str     # auto: pages without text print as images
     dither: str
     embedded_images: bool
@@ -161,11 +168,13 @@ def resolve_settings(argv: List[str], env: Dict[str, str]) -> Settings:
 
     cols = bounded_int(raw.get("EscposCols"), profile["cols"], 1, 1000)
     dots = profile["dots"]
+    paper_pt = profile["paper_pt"]
     # A 58mm roll can't fit more than the profile's 58mm column count
     page_size = raw.get("PageSize") or raw.get("PageRegion") or raw.get("media") or ""
     if "58" in page_size:
         cols = min(cols, profile["cols_58mm"])
         dots = profile["dots_58mm"]
+        paper_pt = profile["paper_58mm_pt"]
 
     def choice(name: str, allowed: Tuple[str, ...]) -> str:
         value = raw.get(name, allowed[0]).lower()
@@ -196,6 +205,7 @@ def resolve_settings(argv: List[str], env: Dict[str, str]) -> Settings:
         copies=bounded_int(argv[4] if len(argv) > 4 else None, 1, 1, MAX_COPIES),
         print_title=raw.get("PrintTitle", "true").lower() in ("true", "on", "yes", "1"),
         dots=dots,
+        paper_pt=paper_pt,
         print_mode=choice("PrintMode", PRINT_MODES),
         dither=choice("Dither", DITHER_METHODS),
         embedded_images=raw.get("EmbeddedImages", "true").lower() in ("true", "on", "yes", "1"),
@@ -965,9 +975,9 @@ def segment_align(s: Segment, left: float, right: float) -> str:
     return "left"
 
 def layout_pages(pages: List[Page], settings: Settings,
-                 image_page: Callable[[int], List[PrintLine]],
+                 drawn_page: Callable[[Page, bool], List[PrintLine]],
                  image_box: Callable[[int, Box, int, int], List[PrintLine]]) -> List[PrintLine]:
-    """Lay out every page. image_page(page) prints a whole page as one image;
+    """Lay out every page. drawn_page(page, fit_content) prints a page as drawn;
     image_box(page, box, width, offset) prints one embedded image."""
     drop_page_furniture(pages)
     body = body_size(pages)
@@ -982,18 +992,27 @@ def layout_pages(pages: List[Page], settings: Settings,
     doc_left = min((e[0] for e in edges), default=0.0)
     doc_right = max((e[1] for e in edges), default=1.0)
 
+    previous_drawn = False
     for p in pages:
         images: List[Box] = []
-        if settings.print_mode != "text" and (settings.embedded_images or not p.segments):
+        if settings.embedded_images or not p.segments:
             images = useful_images(p)
-        if settings.print_mode == "image" or (settings.print_mode == "auto" and not p.segments and not images):
-            # A page with nothing but drawing (or PrintMode=Image) prints whole
+        # A page as wide as the paper was laid out for it (an iPhone or Mac
+        # prints on the queue's 80mm page), so it prints just as it was drawn
+        receipt_width = abs(p.width / XML_ZOOM - settings.paper_pt) <= 0.05 * settings.paper_pt
+        as_drawn = settings.print_mode == "image" or (settings.print_mode == "auto" and receipt_width)
+        if as_drawn or (not p.segments and not images):
             if carry:
                 out += carry.lines()
                 carry = None
-            out.append(PrintLine())
-            out += image_page(p.number)
+            if not previous_drawn:
+                out.append(PrintLine())
+            # Receipt-width pages keep their margins; anything else is cropped
+            # to what's drawn and scaled to the paper width
+            out += drawn_page(p, not receipt_width)
+            previous_drawn = True
             continue
+        previous_drawn = False
         blocks = build_blocks(p.segments)
         classify_blocks(blocks, max((s.right for s in p.segments), default=1.0)
                         - min((s.left for s in p.segments), default=0.0), body)
@@ -1358,6 +1377,56 @@ def image_page_lines(pdf_path: str, page: int, settings: Settings) -> List[Print
         return []
     return image_lines(img, settings, f"page {page}")
 
+TEXT_THRESHOLD = 170  # as-drawn pages: lighter than this is paper; keeps light-gray text
+
+def drawn_page_lines(pdf_path: str, page: Page, fit_content: bool, settings: Settings) -> List[PrintLine]:
+    """A page printed as drawn. With fit_content, cropped to what's drawn and
+    scaled to the paper width; otherwise the whole page width maps onto the
+    paper, trimming only blank space above and below. Text, rules and vector
+    logos are thresholded so they stay crisp; the page's raster photos are
+    dithered."""
+    if Image is None:
+        log("WARNING", "python3-pil is not installed, so image pages can't print")
+        return [PrintLine(f"[page {page.number}: image not printed]")]
+    paper = settings.dots - settings.dots % 8
+    # At 72 dpi one pixel is one point: find what's drawn
+    preview = render_page_gray(pdf_path, page.number, 72)
+    bbox = ImageOps.invert(preview).point(lambda v: 255 if v > 8 else 0).getbbox()
+    if not bbox:
+        return []
+    left, top, right, bottom = bbox
+    if not fit_content:
+        left, right = 0, preview.width
+    # Render at the paper's resolution (twice that when it'll be scaled, for clean edges)
+    dpi = min(1200.0, 72.0 * paper * (2 if fit_content else 1) / max(1, right - left))
+    scale = dpi / 72
+    x0, y0 = int(left * scale), int(top * scale)
+    img = render_page_gray(pdf_path, page.number, dpi, (
+        x0, y0, max(1, int((right - left) * scale)), int((bottom - top) * scale) + 1))
+    ratio = paper / img.width
+    img = fit_width(img, paper) if img.width != paper else img
+
+    bw = img.point(lambda v: 255 if v >= TEXT_THRESHOLD else 0).convert("1", dither=Image.Dither.NONE)
+    photos = 0
+    if img.width == paper and img.height < MAX_IMAGE_ROWS:
+        for bx, by, bwid, bht in useful_images(page):
+            # The image's box in output pixels
+            k = scale / XML_ZOOM * ratio
+            box = (max(0, int(bx * k - x0 * ratio)), max(0, int(by * k - y0 * ratio)),
+                   min(paper, int((bx + bwid) * k - x0 * ratio)), min(img.height, int((by + bht) * k - y0 * ratio)))
+            if box[2] - box[0] < 8 or box[3] - box[1] < 8:
+                continue
+            region = ImageOps.autocontrast(img.crop(box), cutoff=1)
+            method = choose_dither(region, settings.dither)
+            if method == "threshold":
+                continue  # logos and QR codes: the page's threshold already suits them
+            gamma = settings.profile["image_gamma"]
+            region = region.point([round(255 * (i / 255) ** gamma) for i in range(256)])
+            bw.paste(dither(region, method), box[:2])
+            photos += 1
+    log("DEBUG", f"page {page.number}: as drawn {bw.width}x{bw.height}, {photos} photo(s) dithered")
+    return [PrintLine(image=raster_commands(bw))]
+
 def image_file_lines(path: str, settings: Settings) -> List[PrintLine]:
     """A JPEG or PNG sent straight to the queue (phone photos). CUPS's own
     image filter would crop it to fill the long receipt page, so the PPD
@@ -1413,7 +1482,7 @@ def extract_print_lines(pdf_path: str, settings: Settings) -> List[PrintLine]:
                 pages = extract_pages(f.read())
         lines = layout_pages(
             pages, settings,
-            lambda n: image_page_lines(pdf_path, n, settings),
+            lambda page, fit_content: drawn_page_lines(pdf_path, page, fit_content, settings),
             lambda n, box, width, offset: box_image_lines(pdf_path, n, box, width, offset, settings))
         log("DEBUG", f"laid out {len(pages)} page(s) from pdftohtml -xml")
         return lines

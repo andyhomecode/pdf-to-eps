@@ -2,13 +2,15 @@
 
 A CUPS filter that prints PDFs, photos and images on an ESC/POS receipt printer, so an Epson TM-T20II shared over AirPrint works from an iPhone or Mac like any other printer.
 
-Instead of rasterizing every page, it reads the PDF's text, layout and fonts and prints them as native printer text: sharp, fast and laid out for a 48-column roll. Pages without text and photos print as dithered images.
+It handles two kinds of document differently:
+- **Pages already laid out for the receipt** print **as drawn**. An iPhone or Mac lays out what it prints on the queue's 80mm page, so the PDF page is exactly the paper's width. The page is rendered 1:1 at 576 dots and matches the phone's print preview: its fonts, layout, logos (vector ones too), photos and QR codes. Text is thresholded so it stays crisp, and the page's photos are dithered.
+- **Other documents** (A4 or Letter PDFs) are read for their text, layout and fonts and printed as native printer text, reflowed to the 48-column roll. Images in them print in place, and pages without text print as images.
 
 It runs on the ThinkCentre server as the filter for the `thermal-receipt` queue. `NOTES.md` covers the printers, how they're connected and what's planned next.
 
 ## What it does
 
-**Text** (from `pdftohtml -xml`, falling back to `pdftotext -layout`):
+**Text layout** for pages that aren't receipt-width, or every page with `PrintMode=Text` (from `pdftohtml -xml`, falling back to `pdftotext -layout`):
 - Paragraphs are rejoined and rewrapped to the paper width, and words hyphenated at line ends are mended.
 - Bullet and numbered items wrap with a hanging indent. Word's Symbol-font bullets print as `*`.
 - Label/value rows, table rows and dot-leader prices (`Latte ...... $4.50`) print with the value right-aligned. Lines of `-`, `_`, `=` or `*` print as one full-width rule.
@@ -37,7 +39,7 @@ Settings come from, lowest to highest priority: the printer profile, the PPD's d
 | `EscposCols` (Columns) | 32, 42, 48 | 48 |
 | `EscposCodepage` (Character Set) | cp437, cp858, latin-1 | cp437 |
 | `PageSize` | Receipt80mm, Receipt58mm (58mm caps columns at 35 and images at 416 dots) | Receipt80mm |
-| `PrintMode` | Auto (pages without text print as images), Text, Image | Auto |
+| `PrintMode` | Auto (receipt-width pages as drawn, others laid out as text), Text (lay out every page as text, reflowed), Image (every page as drawn) | Auto |
 | `Dither` | Auto, Atkinson, Floyd-Steinberg, Threshold | Auto |
 | `EmbeddedImages` (Print Images in Documents) | True, False | True |
 | `PrintTitle` | True, False | True |
@@ -81,6 +83,8 @@ sudo ./install.sh --rollback       # back to the previous filter and PPD
 The PPD sends `application/pdf`, `image/jpeg` and `image/png` straight to the filter. Images have to skip CUPS's own image filter, which would crop a photo to fill the long receipt page.
 
 ## Testing
+
+`tools/corpus.py` runs the filter over a folder of real documents (default `tests/private/`, which git ignores, for personal emails and tickets). It saves each one's decoded output and a picture of the printout, and with `--ref main` lists which documents print differently from that version. Run it before committing a layout change.
 
 ```bash
 python3 -m unittest discover tests

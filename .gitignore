@@ -7,3 +7,6 @@
 /*.png
 
 __pycache__/
+
+# Personal sample documents for tools/corpus.py; never committed
+/tests/private/

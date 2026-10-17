@@ -12,7 +12,8 @@ All queues run on the ThinkCentre (`/usr/lib/cups/filter/pdf2escpos.py`, PPDs in
 
 ## How a job reaches the printer
 
-- **PDF** (documents, web pages, email from the phone, anything from a Mac): CUPS passes the PDF to `pdf2escpos.py`, which prints the text as text and pages without text as images.
+- **PDF from the iPhone or a Mac** (web pages, email): iOS and macOS lay the content out on the queue's 80mm page, so the PDF's pages are exactly the paper's width. `pdf2escpos.py` prints those pages as drawn, matching the print preview, and lets Apple decide the layout. Chosen on 2026-10-17 after per-PDF reflow fixes kept piling up. The cost is paper: a long web page in iOS's large font can run over a metre and a half (175 cm for one NYC DEP page, against 58 cm reflowed). `PrintMode=Text` reflows instead.
+- **Other PDFs** (A4 or Letter documents, attachments): laid out as printer text, reflowed to 48 columns.
 - **JPEG/PNG** (photos from the phone): the iPhone sends `image/jpeg` on the borderless 80x297mm page. CUPS's own image filter would rotate and crop the photo to fill that strip (seen 2026-10-17), so the PPD's `*cupsFilter` lines route images straight to `pdf2escpos.py`, which prints the whole photo at the paper width.
 - **Raw** (`lp -o raw`): goes straight to the printer.
 
@@ -27,7 +28,9 @@ AirPrint doesn't show the custom menus (Columns, Character Set, Print Mode, Dith
 - **QR codes in emails** stay scannable: on 2026-10-17 a Gmail ticket's QR printed at 441 dots (about 13 dots per module), and ZXing decoded the exact printed bits, even at half size.
 - **Embedded images:** the size rules are `FULL_WIDTH_FRACTION`, `MIN_IMAGE_FRACTION` and `MIN_IMAGE_PT` at the top of the Layout section.
 - **Layout thresholds** (top of the Layout section in `pdf2escpos.py`): heading size ratios, the 0.75× cutoff for dropping small diagram text, and the 8% page margin zone checked for headers and footers.
-- **Web pages from the phone** are laid out on the 80mm page with few words per line. Lines spanning 60% or more of the page's text width (`PROSE_WIDTH_SHARE`) count as running text and are reflowed to 48 columns, and a paragraph split by a page break is joined back up.
+- **As-drawn pages:** `TEXT_THRESHOLD` (170) decides what's paper and what's ink. It's above middle gray so light-gray text survives. Photos in the page (its raster images) are dithered separately.
+- **Web pages reflowed with `PrintMode=Text`:** lines spanning 60% or more of the page's text width (`PROSE_WIDTH_SHARE`) count as running text, and a paragraph split by a page break is joined back up.
+- **Checking a change:** put real documents in `tests/private/` (git-ignored) and run `python3 tools/corpus.py --ref main` to see which of them print differently.
 
 ## Phase 2: Citizen CD-S500A
 
