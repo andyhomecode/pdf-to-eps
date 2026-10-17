@@ -459,6 +459,7 @@ DOUBLE_SIZE_RATIO = 2.0
 DOUBLE_HEIGHT_RATIO = 1.4
 BOLD_HEADING_RATIO = 1.15
 HEADING_MAX_CHARS = 60    # longer text is never styled as a heading
+PROSE_WIDTH_SHARE = 0.6   # lines this share of the page's text width are running text
 SMALL_TEXT_RATIO = 0.75   # smaller non-prose text (diagram labels) is dropped
 MARGIN_ZONE = 0.08        # top/bottom share of the page checked for headers/footers
 XML_ZOOM = 1.5            # pdftohtml units per PDF point
@@ -725,8 +726,10 @@ def build_blocks(segs: List[Segment]) -> List[Block]:
             last = b.segs[-1]
             if last.line_id == s.line_id or standalone(last):
                 continue
-            gap = s.top - last.bottom
-            if not (-0.3 * s.height <= gap <= 0.6 * s.height):
+            # Line pitch, top to top: tightly set headings have overlapping boxes
+            pitch = s.top - last.top
+            h = max(s.height, last.height)
+            if not (0.3 * h <= pitch <= 1.6 * h):
                 continue
             if abs(s.size - last.size) > 0.1 * last.size:
                 continue
@@ -736,7 +739,7 @@ def build_blocks(segs: List[Segment]) -> List[Block]:
             after_indent = len(b.segs) == 1 and 0 < b.left - s.left <= 6 * cw
             # A bullet item's wrapped lines are indented under its text
             under_bullet = (BULLET.match(last.text) is not None or any(
-                BULLET.match(x.text) and abs(x.left - b.left) <= cw for x in b.segs[-3:])) \
+                BULLET.match(x.text) and abs(x.left - b.left) <= cw for x in b.segs)) \
                 and 0 < s.left - b.left <= 6 * cw
             if (same_left or after_indent or under_bullet) and s.left <= b.right and s.right >= b.left:
                 b.segs.append(s)
@@ -745,14 +748,27 @@ def build_blocks(segs: List[Segment]) -> List[Block]:
             blocks.append(Block([s]))
     return blocks
 
-def classify_blocks(blocks: List[Block]) -> None:
+def classify_blocks(blocks: List[Block], content_width: float, body: float) -> None:
+    """Prose: running text to reflow. Its lines are long, or span most of the
+    page's text width (a phone lays web pages out with few words per line),
+    or, at normal size, it's a list or its lines carry on mid-sentence."""
     lines_with_others: Dict[int, int] = Counter()
     for b in blocks:
         for s in b.segs:
             lines_with_others[s.line_id] += 1
     for b in blocks:
         mean_len = sum(len(s.text) for s in b.segs) / len(b.segs)
-        if len(b.segs) >= 2 and mean_len >= 25:
+        mean_width = sum(s.right - s.left for s in b.segs) / len(b.segs)
+        listed = any(BULLET.match(s.text) for s in b.segs)  # list items wrap like prose
+        # Lines that carry on mid-sentence: the next starts lowercase, or this one
+        # ends with a comma or hyphen. Addresses and headings start lines with capitals.
+        carried = sum(nxt.text[:1].islower() or cur.text.endswith((",", "-"))
+                      for cur, nxt in zip(b.segs, b.segs[1:]))
+        # Small text only counts by length or width, or diagram labels written
+        # over several lines ("Force" / "control" / "signal") would pass
+        normal_size = max(s.size for s in b.segs) >= SMALL_TEXT_RATIO * body
+        if len(b.segs) >= 2 and (mean_len >= 25 or mean_width >= PROSE_WIDTH_SHARE * content_width
+                                 or (normal_size and (listed or carried * 2 >= len(b.segs) - 1))):
             b.kind = "prose"
         elif len(b.segs) >= 2 and sum(lines_with_others[s.line_id] > 1 for s in b.segs) < 0.6 * len(b.segs):
             # A column of short lines (an address) that mostly doesn't line up with other text
@@ -787,15 +803,24 @@ def join_lines(texts: List[str]) -> str:
             out = f"{out} {t}" if out else t
     return out
 
+def append_words(out: List[Word], words: List[Word]) -> None:
+    """Add a line's words to a paragraph, mending what the line break split:
+    're-' + 'ceptors' -> 'receptors', and '24-' + '163' -> '24-163'."""
+    if out and words:
+        last, first = out[-1][0], words[0][0]
+        if re.search(r"[a-z]-$", last) and first[:1].islower():
+            out[-1] = (last[:-1] + first, out[-1][1])
+            words = words[1:]
+        elif re.search(r"\d-$", last) and first[:1].isdigit():
+            out[-1] = (last + first, out[-1][1])
+            words = words[1:]
+    out += words
+
 def join_words(segs: List[Segment]) -> List[Word]:
     """join_lines for words that carry their boldness."""
     out: List[Word] = []
     for s in segs:
-        words = list(s.words) or [(w, s.bold) for w in s.text.split()]
-        if out and words and re.search(r"[a-z]-$", out[-1][0]) and words[0][0][:1].islower():
-            out[-1] = (out[-1][0][:-1] + words[0][0], out[-1][1])
-            words = words[1:]
-        out += words
+        append_words(out, list(s.words) or [(w, s.bold) for w in s.text.split()])
     return out
 
 def wrap_words(words: List[Word], width: int, hang: int = 0) -> List[List[Word]]:
@@ -851,6 +876,34 @@ def wrap_words(words: List[Word], width: int, hang: int = 0) -> List[List[Word]]
         merged.append(spans)
     return merged
 
+@dataclass
+class Para:
+    """A paragraph of running text, wrapped when it's printed so a paragraph
+    split by a page break can be joined back together first."""
+    words: List[Word]
+    size: str
+    bold: bool
+    red: bool
+    hang: int
+    width: int
+
+    def lines(self) -> List[PrintLine]:
+        out = []
+        for spans in wrap_words(self.words, self.width, self.hang):
+            inline = [] if self.bold or not any(b for _, b in spans) else spans
+            out.append(PrintLine("".join(t for t, _ in spans), "left", self.bold, self.red, self.size,
+                                 spans=inline))
+        return out
+
+    def continued_by(self, nxt: "Para") -> bool:
+        """Does `nxt`, at the top of the next page, carry on this paragraph?"""
+        if not self.words or not nxt.words or (self.size, self.bold) != (nxt.size, nxt.bold):
+            return False
+        last, first = self.words[-1][0], nxt.words[0][0]
+        if re.search(r"[.!?:]['\"\u2019\u201d)\]]*$", last) or BULLET.match(first + " "):
+            return False
+        return first[:1].islower() or first[:1].isdigit() or last.endswith((",", "-"))
+
 def split_paragraphs(block: Block) -> List[List[Segment]]:
     """Split a prose block where a line is short, starts a bullet, or is indented."""
     paras: List[List[Segment]] = []
@@ -861,8 +914,10 @@ def split_paragraphs(block: Block) -> List[List[Segment]]:
         # Lines indented under a bullet item's text continue the item
         under_bullet = (paras and BULLET.match(paras[-1][0].text)
                         and s.left - paras[-1][0].left > 1.5 * s.char_width)
+        # "Section 24-" then "112. Learn..." is a split number, not a list item
+        after_break = paras and paras[-1][-1].text.endswith(("-", ","))
         new_para = (not paras
-                    or BULLET.match(s.text)
+                    or (BULLET.match(s.text) and not after_break)
                     or (not under_bullet and (
                         s.left - block.left > 1.5 * s.char_width
                         or full_right - paras[-1][-1].right > first_word * s.char_width)))
@@ -918,6 +973,7 @@ def layout_pages(pages: List[Page], settings: Settings,
     body = body_size(pages)
     paper = settings.dots - settings.dots % 8
     out: List[PrintLine] = []
+    carry: Optional[Para] = None  # last paragraph of the previous page
 
     # Embedded images are sized and placed against the content width of the
     # whole document, so an image on a page without text keeps its size
@@ -932,11 +988,15 @@ def layout_pages(pages: List[Page], settings: Settings,
             images = useful_images(p)
         if settings.print_mode == "image" or (settings.print_mode == "auto" and not p.segments and not images):
             # A page with nothing but drawing (or PrintMode=Image) prints whole
+            if carry:
+                out += carry.lines()
+                carry = None
             out.append(PrintLine())
             out += image_page(p.number)
             continue
         blocks = build_blocks(p.segments)
-        classify_blocks(blocks)
+        classify_blocks(blocks, max((s.right for s in p.segments), default=1.0)
+                        - min((s.left for s in p.segments), default=0.0), body)
 
         # Small text that isn't running prose is diagram labels; leave it out
         for b in blocks:
@@ -949,8 +1009,8 @@ def layout_pages(pages: List[Page], settings: Settings,
         left = min([s.left for s in kept] + [b[0] for b in images])
         right = max([s.right for s in kept] + [b[0] + b[2] for b in images])
 
-        # Items to print, each (top, bottom, lines). Rows group segments by line.
-        items: List[Tuple[float, float, List[PrintLine]]] = []
+        # Items to print, each (top, bottom, lines or paragraphs). Rows group segments by line.
+        items: List[Tuple[float, float, list]] = []
 
         # Embedded images keep their size relative to the text, and their alignment
         for box in images:
@@ -958,9 +1018,9 @@ def layout_pages(pages: List[Page], settings: Settings,
             share = w / max(1.0, doc_right - doc_left)
             width = paper if share >= FULL_WIDTH_FRACTION else \
                 int(min(paper, max(paper * MIN_IMAGE_FRACTION, share * paper)))
-            align = segment_align(Segment("", x, x + w, y, y + h, 0, False, False, p.number, -1),
-                                  doc_left, doc_right)
-            offset = {"left": 0, "right": paper - width}.get(align, (paper - width) // 2)
+            # Placed by which third of the content width the image's centre is in
+            third = (x + w / 2 - doc_left) / max(1.0, doc_right - doc_left) * 3
+            offset = 0 if third < 1 else paper - width if third >= 2 else (paper - width) // 2
             items.append((y, y + h, image_box(p.number, box, width, offset)))
         rows: Dict[int, List[Segment]] = {}
         for b in blocks:
@@ -970,6 +1030,7 @@ def layout_pages(pages: List[Page], settings: Settings,
                 continue
             lines: List[PrintLine] = []
             if b.kind == "prose":
+                paras = []
                 for para in split_paragraphs(b):
                     words = join_words(para)
                     text = " ".join(w for w, _ in words)
@@ -979,10 +1040,9 @@ def layout_pages(pages: List[Page], settings: Settings,
                     # Mostly bold prints all bold; otherwise bold words stay bold
                     bold = bold or sum(len(w) for w, wb in words if wb) * 2 > len(text)
                     red = sum(len(s.text) for s in para if s.red) * 2 > len(text)
-                    for spans in wrap_words(words, width, hang):
-                        inline = [] if bold or not any(sb for _, sb in spans) else spans
-                        lines.append(PrintLine("".join(t for t, _ in spans), "left", bold, red, size,
-                                               spans=inline))
+                    paras.append(Para(words, size, bold, red, hang, width))
+                items.append((b.segs[0].top, b.segs[-1].bottom, paras))
+                continue
             else:
                 size, bold = size_style(max(s.size for s in b.segs), body,
                                         max((s.text for s in b.segs), key=len))
@@ -1010,6 +1070,13 @@ def layout_pages(pages: List[Page], settings: Settings,
             red = any(s.red for s in segs)
             width = settings.cols // 2 if size == "2W2H" else settings.cols
             align = segment_align(segs[0], left, right) if len(segs) == 1 else "left"
+            if len(segs) == 1 and align == "left" and not PRICE.match(segs[0].text):
+                # A plain line is a one-line paragraph: it keeps bold words, and
+                # can be joined to text the page break carried onto the next page
+                words = list(segs[0].words) or [(w, segs[0].bold) for w in segs[0].text.split()]
+                hang = len(words[0][0]) + 1 if BULLET.match(segs[0].text) else 0
+                items.append((top, bottom, [Para(words, size, bold, red, hang, width)]))
+                continue
             lines = []
             for text, hang in fit_row(segs, width):
                 lines += [PrintLine(t, align, bold, red, size) for t in wrap(text, width, hang)]
@@ -1018,17 +1085,36 @@ def layout_pages(pages: List[Page], settings: Settings,
         items.sort(key=lambda it: it[0])
         prev_bottom: Optional[float] = None
         line_height = body * 1.2 or 12.0
-        for top, bottom, lines in items:
+        for n, (top, bottom, content) in enumerate(items):
+            paras = content if content and isinstance(content[0], Para) else None
             if prev_bottom is None:
-                if out:
-                    out.append(PrintLine())  # page break
+                # Top of a page: carry on a paragraph the page break split
+                if carry and paras and carry.continued_by(paras[0]):
+                    append_words(carry.words, paras[0].words)
+                    paras = [carry] + paras[1:]
+                else:
+                    if carry:
+                        out += carry.lines()
+                    if out:
+                        out.append(PrintLine())  # page break
+                carry = None
             else:
                 gap = top - prev_bottom
                 # A blank line for paragraph spacing, or between side-by-side blocks
                 if gap > 0.6 * line_height or gap < -0.5 * line_height:
                     out.append(PrintLine())
-            out += lines
+            if paras:
+                # Hold the page's last paragraph back in case the next page continues it
+                if n == len(items) - 1:
+                    carry = paras[-1]
+                    paras = paras[:-1]
+                for para in paras:
+                    out += para.lines()
+            else:
+                out += content
             prev_bottom = bottom
+    if carry:
+        out += carry.lines()
     return out
 
 def layout_plain(text: str, settings: Settings) -> List[PrintLine]:

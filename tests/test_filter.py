@@ -27,6 +27,7 @@ PHOTO_PDF = os.path.join(FIXTURES, "photo.pdf")
 QR_PDF = os.path.join(FIXTURES, "qr.pdf")
 EMAIL_PDF = os.path.join(FIXTURES, "email.pdf")
 NOTICE_PDF = os.path.join(FIXTURES, "notice.pdf")
+WEBPAGE_PDF = os.path.join(FIXTURES, "webpage.pdf")
 
 
 def argv(copies="1", options=""):
@@ -212,6 +213,13 @@ class TestLayoutHelpers(unittest.TestCase):
         self.assertEqual(f.wrap_words([("*", False), ("aa", False), ("bbbb-cccc", False)], 8, hang=2),
                          [[("* aa", False)], [("  bbbb-", False)], [("  cccc", False)]])
 
+    def test_split_number_is_not_a_list_item(self):
+        seg = lambda text, top: f.Segment(text, 50, 50 + 7 * len(text), top, top + 20, 19, False, False, 1, top)
+        block = f.Block([seg("documents pursuant to Section 24-", 0), seg("112. Learn about what to send.", 24)])
+        self.assertEqual(len(f.split_paragraphs(block)), 1)
+        self.assertEqual(" ".join(w for w, _ in f.join_words(block.segs)),
+                         "documents pursuant to Section 24-112. Learn about what to send.")
+
     def test_fit_row(self):
         seg = lambda text, left, right: f.Segment(text, left, right, 0, 10, 10, False, False, 1, 1)
         self.assertEqual(f.fit_row([seg("Total", 0, 50), seg("$9.99", 400, 450)], 20),
@@ -251,6 +259,17 @@ class TestLayout(unittest.TestCase):
         self.assertIn("[B]PLEASE TAKE NOTICE[/B] that Special Meetings of", text)
         self.assertIn("[B]BY ORDER OF THE MAYOR OF THE VILLAGE\n[/B]", text)
         self.assertEqual(text.count("[B]"), 2)
+
+    def test_webpage(self):
+        # Few words per line on the 80mm page, as iPhone prints web pages
+        text = preview(WEBPAGE_PDF, "PrintTitle=false")
+        self.assertIn("[B]Citizens Air Complaint Program\n", text)  # tight leading kept in order
+        self.assertIn("Idling emissions from gasoline and diesel motor\nvehicle engines", text)
+        # The second paragraph runs onto page 2 ("in our complaint program...")
+        # and is joined back up with no blank line
+        self.assertIn("enforcement efforts, you can also participate in\nour complaint program, which", text)
+        self.assertIn("1. Questions and comments submitted by email\n   will be answered in ten business days.\n"
+                      "2. Submissions are reviewed", text)
 
     def test_textbook(self):
         text = preview(TEXTBOOK_PDF)

@@ -27,6 +27,7 @@ AirPrint doesn't show the custom menus (Columns, Character Set, Print Mode, Dith
 - **QR codes in emails** stay scannable: on 2026-10-17 a Gmail ticket's QR printed at 441 dots (about 13 dots per module), and ZXing decoded the exact printed bits, even at half size.
 - **Embedded images:** the size rules are `FULL_WIDTH_FRACTION`, `MIN_IMAGE_FRACTION` and `MIN_IMAGE_PT` at the top of the Layout section.
 - **Layout thresholds** (top of the Layout section in `pdf2escpos.py`): heading size ratios, the 0.75× cutoff for dropping small diagram text, and the 8% page margin zone checked for headers and footers.
+- **Web pages from the phone** are laid out on the 80mm page with few words per line. Lines spanning 60% or more of the page's text width (`PROSE_WIDTH_SHARE`) count as running text and are reflowed to 48 columns, and a paragraph split by a page break is joined back up.
 
 ## Phase 2: Citizen CD-S500A
 
@@ -52,6 +53,6 @@ Plan:
 - Landscape photos print full width but short (a 4:3 photo is about 7 x 5 cm). They could be turned sideways to print larger along the paper.
 - Vector drawings (SVG logos in emails, charts) aren't printed on pages that have text. `pdftohtml` only reports raster images; finding drawings means rendering the page and looking for drawn areas that aren't text.
 - The CUPS Scaling option (Auto, Fit, Fill, None) is ignored.
-- A paragraph that continues onto the next page isn't joined across the page break.
+- A hyphen at the end of a line is always treated as a word broken by the line: `health-` / `related` prints as `healthrelated`. Position alone can't tell it from `re-` / `ceptors`.
 - Email headers (From, Reply-To, To) sometimes run together into one paragraph.
 - Separate short lines can join into one paragraph when each item fills its line, as with the meeting dates in a 2026-10-17 village notice. Position alone can't tell these from wrapped text.

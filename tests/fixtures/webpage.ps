@@ -1,0 +1,46 @@
+%!PS
+% Source for webpage.pdf: a web page as an iPhone prints it, laid out on the
+% 80mm receipt page with a big font, so each line holds few words. Words are
+% wrapped here like a browser would. It has a heading set with tight line
+% spacing, paragraphs that run across page breaks, and a numbered list.
+% Rebuild with:
+%   ps2pdf tests/fixtures/webpage.ps tests/fixtures/webpage.pdf
+
+<< /PageSize [227 842] >> setpagedevice
+
+/X 18 def /W 190 def /TOP 800 def /BOTTOM 560 def
+/Y TOP def /LH 16 def /curw 0 def
+/body { /Helvetica findfont 13 scalefont setfont } def
+
+% New line, and a new page below BOTTOM (the font has to be set again)
+/nl { /Y Y LH sub def /curw 0 def Y BOTTOM lt { showpage /Y TOP def body } if } def
+
+% Show one word, wrapping first if it doesn't fit
+/word {
+  dup stringwidth pop curw add W gt curw 0 gt and { nl } if
+  X curw add Y moveto dup show
+  stringwidth pop curw add ( ) stringwidth pop add /curw exch def
+} def
+
+% Show a paragraph: (text) para
+/para { { ( ) search { exch pop word } { word exit } ifelse } loop nl } def
+
+% Heading in a big font with line spacing tighter than the font
+/Helvetica-Bold findfont 26 scalefont setfont
+X Y moveto (Citizens Air) show /Y Y 22 sub def
+X Y moveto (Complaint) show /Y Y 22 sub def
+X Y moveto (Program) show /Y Y 30 sub def
+
+body
+(Idling emissions from gasoline and diesel motor vehicle engines are known contributors to health impacts, including asthma and cardiovascular harm. Idling for longer than three minutes is illegal.) para
+/Y Y 8 sub def
+(If you would like to receive a reward for your enforcement efforts, you can also participate in our complaint program, which lets you file and track complaints online and see every decision that is made about them.) para
+/Y Y 8 sub def
+
+% A numbered list: marker at X, wrapped text indented under it
+/X 32 def /W 176 def
+18 Y moveto (1.) show
+(Questions and comments submitted by email will be answered in ten business days.) para
+18 Y moveto (2.) show
+(Submissions are reviewed by at least two reviewers, including a supervisor, before a decision is made.) para
+showpage
