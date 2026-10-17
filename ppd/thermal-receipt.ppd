@@ -1,0 +1,56 @@
+*PPD-Adobe: "4.3"
+*FormatVersion: "4.3"
+*FileVersion: "1.0"
+*LanguageVersion: English
+*LanguageEncoding: ISOLatin1
+*PCFileName: "thermal.ppd"
+*Product: "(Thermal Receipt Printer)"
+*Manufacturer: "Generic"
+*ModelName: "Thermal Receipt Printer"
+*ShortNickName: "Thermal Receipt"
+*NickName: "Thermal Receipt Printer"
+*PSVersion: "(3010.000) 0"
+*LanguageLevel: "3"
+*ColorDevice: False
+*DefaultColorSpace: Gray
+*FileSystem: False
+*Throughput: "1"
+*LandscapeOrientation: Plus90
+*TTRasterizer: Type42
+
+*OpenUI *PageSize/Page Size: PickOne
+*DefaultPageSize: Receipt80mm
+*PageSize Receipt80mm/80mm Receipt: "<</PageSize[226.77 841.89]/ImagingBBox null>>setpagedevice"
+*PageSize Receipt58mm/58mm Receipt: "<</PageSize[164.41 841.89]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageSize
+
+*OpenUI *PageRegion: PickOne
+*DefaultPageRegion: Receipt80mm
+*PageRegion Receipt80mm/80mm Receipt: "<</PageSize[226.77 841.89]/ImagingBBox null>>setpagedevice"
+*PageRegion Receipt58mm/58mm Receipt: "<</PageSize[164.41 841.89]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageRegion
+
+*DefaultImageableArea: Receipt80mm
+*ImageableArea Receipt80mm/80mm Receipt: "0.00 0.00 226.77 841.89"
+*ImageableArea Receipt58mm/58mm Receipt: "0.00 0.00 164.41 841.89"
+
+*DefaultPaperDimension: Receipt80mm
+*PaperDimension Receipt80mm/80mm Receipt: "226.77 841.89"
+*PaperDimension Receipt58mm/58mm Receipt: "164.41 841.89"
+
+*OpenUI *EscposCols/Columns: PickOne
+*DefaultEscposCols: 48
+*EscposCols 32/32 columns: ""
+*EscposCols 42/42 columns: ""
+*EscposCols 48/48 columns: ""
+*CloseUI: *EscposCols
+
+*OpenUI *EscposCodepage/Character Set: PickOne
+*DefaultEscposCodepage: cp437
+*EscposCodepage cp437/CP437 (US): ""
+*EscposCodepage cp858/CP858 (Western Europe): ""
+*EscposCodepage latin-1/Latin-1: ""
+*CloseUI: *EscposCodepage
+
+*cupsFilter: "application/pdf 0 pdf2escpos.py"
+*cupsManualCopies: True

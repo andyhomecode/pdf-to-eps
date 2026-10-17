@@ -1,0 +1,9 @@
+# Filter output from test runs
+*.escpos
+
+# Stray test images in the repo root (fixtures live in tests/fixtures/)
+/*.jpg
+/*.jpeg
+/*.png
+
+__pycache__/
