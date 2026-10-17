@@ -249,6 +249,21 @@ class TestLayout(unittest.TestCase):
         self.assertIn("Thank you for visiting. This paragraph is long\nenough", text)
         self.assertNotRegex(text, r"\n1\n")  # page number dropped
 
+    def test_long_title_wraps(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ESCPOS_")}
+        title = "Citizens Air Complaint Program - DEP - New York City Department of Environmental Protection"
+        out = subprocess.run([sys.executable, FILTER, "1", "a", title, "1", "", RECEIPT_PDF],
+                             capture_output=True, env=env, timeout=60).stdout
+        text = escpos_preview.Decoder(out, "cp437", None).run()
+        self.assertIn("[CENTER][U]Citizens Air Complaint Program - DEP - New York\n"
+                      "City Department of Environmental Protection\n[/U]", text)
+        # Very long titles stop after three lines
+        out = subprocess.run([sys.executable, FILTER, "1", "a", "word " * 60, "1", "", RECEIPT_PDF],
+                             capture_output=True, env=env, timeout=60).stdout
+        text = escpos_preview.Decoder(out, "cp437", None).run()
+        self.assertEqual(text.split("[/U]")[0].count("\n"), 3)
+        self.assertIn("...\n[/U]", text)
+
     def test_receipt_narrow(self):
         text = preview(RECEIPT_PDF, "EscposCols=32")
         self.assertIn("Latte" + " " * 22 + "$4.50", text)
@@ -375,7 +390,7 @@ class TestImages(unittest.TestCase):
 
     def test_image_only_pdf_has_no_title(self):
         self.assertNotIn("Test", preview(PHOTO_PDF))
-        self.assertIn("[U]Test[/U]", preview(RECEIPT_PDF))
+        self.assertIn("[U]Test\n[/U]", preview(RECEIPT_PDF))
 
     def test_png_with_transparency(self):
         # 200x200 QR blocks; transparent areas are white, and it stays sharp
