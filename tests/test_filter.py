@@ -21,6 +21,8 @@ FIXTURES = os.path.join(REPO, "tests", "fixtures")
 RECEIPT_PDF = os.path.join(FIXTURES, "receipt.pdf")
 INVOICE_PDF = os.path.join(FIXTURES, "sample-invoice.pdf")
 TEXTBOOK_PDF = os.path.join(FIXTURES, "sample-textbook.pdf")
+PHOTO_PDF = os.path.join(FIXTURES, "photo.pdf")
+QR_PDF = os.path.join(FIXTURES, "qr.pdf")
 
 
 def argv(copies="1", options=""):
@@ -227,6 +229,61 @@ class TestLayout(unittest.TestCase):
         self.assertIn("corpuscles and Merkel's disks.", text)
         for label in ("Epidermis", "Papillary Ridges", "From Wikibooks"):
             self.assertNotIn(label, text)  # diagram labels and running headers dropped
+
+
+@unittest.skipIf(f.Image is None, "python3-pil not installed")
+class TestImages(unittest.TestCase):
+    def test_auto_dither_choice(self):
+        s = f.resolve_settings(argv(), {})
+        qr = f.page_image(QR_PDF, 1, s.dots)
+        photo = f.page_image(PHOTO_PDF, 1, s.dots)
+        self.assertEqual(f.choose_dither(f.ImageOps.autocontrast(qr, cutoff=1), "auto"), "threshold")
+        self.assertEqual(f.choose_dither(f.ImageOps.autocontrast(photo, cutoff=1), "auto"), "atkinson")
+        self.assertEqual(f.choose_dither(photo, "floyd-steinberg"), "floyd-steinberg")
+
+    def test_page_image_is_paper_width(self):
+        img = f.page_image(PHOTO_PDF, 1, 576)
+        self.assertEqual(img.size, (576, 432))  # 400x300 image scaled to 576 wide
+
+    def test_atkinson_exact(self):
+        # 0, 64, 128, 255: 64 goes black and passes +8 right; 136 goes white
+        # and passes -15 on; 248 goes white
+        img = f.Image.new("L", (4, 1))
+        img.putdata([0, 64, 128, 255])
+        self.assertEqual(list(f.atkinson(img).getdata()), [0, 0, 255, 255])
+
+    def test_atkinson_spreads_error_down(self):
+        # Mid gray: about half the dots black, and not in a solid block
+        img = f.Image.new("L", (16, 16), 128)
+        dots = list(f.atkinson(img).getdata())
+        black = dots.count(0)
+        self.assertTrue(80 <= black <= 176, black)
+
+    def test_raster_commands(self):
+        img = f.Image.new("1", (16, 300), 255)
+        img.putpixel((0, 0), 0)
+        out = f.raster_commands(img)
+        # Two bands: 256 rows then 44 rows, 2 bytes per row; 1 = black
+        self.assertEqual(out[:8], b"\x1dv0\x00\x02\x00\x00\x01")
+        self.assertEqual(out[8:10], b"\x80\x00")
+        second = 8 + 2 * 256
+        self.assertEqual(out[second:second + 8], b"\x1dv0\x00\x02\x00\x2c\x00")
+        self.assertEqual(len(out), 8 + 512 + 8 + 88)
+
+    def test_image_only_pdf_prints_image(self):
+        text = preview(PHOTO_PDF)
+        self.assertIn("[IMG 576x256]", text)
+        self.assertIn("[IMG 576x176]", text)
+
+    def test_print_mode(self):
+        self.assertIn("[IMG 576x", preview(RECEIPT_PDF, "PrintMode=Image"))
+        self.assertNotIn("[IMG", preview(RECEIPT_PDF))
+        text = preview(PHOTO_PDF, "PrintMode=Text")
+        self.assertNotIn("[IMG", text)
+        self.assertIn("This PDF has no text", text)
+
+    def test_58mm_images_are_narrower(self):
+        self.assertIn("[IMG 416x", preview(PHOTO_PDF, "PageSize=Receipt58mm"))
 
 
 if __name__ == "__main__":

@@ -52,5 +52,26 @@
 *EscposCodepage latin-1/Latin-1: ""
 *CloseUI: *EscposCodepage
 
+*OpenUI *PrintMode/Print Mode: PickOne
+*DefaultPrintMode: Auto
+*PrintMode Auto/Automatic (pages without text print as images): ""
+*PrintMode Text/Text only: ""
+*PrintMode Image/Image only: ""
+*CloseUI: *PrintMode
+
+*OpenUI *Dither/Image Dithering: PickOne
+*DefaultDither: Auto
+*Dither Auto/Automatic: ""
+*Dither Atkinson/Atkinson (photos): ""
+*Dither Floyd-Steinberg/Floyd-Steinberg: ""
+*Dither Threshold/Threshold (QR codes, logos): ""
+*CloseUI: *Dither
+
+*OpenUI *PrintTitle/Print Job Title: Boolean
+*DefaultPrintTitle: True
+*PrintTitle True/Yes: ""
+*PrintTitle False/No: ""
+*CloseUI: *PrintTitle
+
 *cupsFilter: "application/pdf 0 pdf2escpos.py"
 *cupsManualCopies: True
