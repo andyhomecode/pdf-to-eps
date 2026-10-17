@@ -7,10 +7,14 @@
 # rotated.jpg: photo.pdf's image stored sideways with EXIF orientation 6,
 #              as phones do; it should print upright (wider than tall)
 # logo.png:  QR blocks on a transparent background
+# email.pdf: text with embedded images, like an email printed from a phone:
+#            a full-width photo and a smaller QR code that should print,
+#            a 1pt tracking pixel and a banner behind text that should not
 
 import math
 import os
 import random
+import subprocess
 
 from PIL import Image
 
@@ -44,6 +48,33 @@ def qr() -> Image.Image:
     return img
 
 
+def ps_image(img: Image.Image, x: float, y: float, w: float, h: float) -> str:
+    """PostScript to draw a grayscale image at x,y (bottom left), w x h points."""
+    data = img.tobytes().hex()
+    return (f"gsave {x} {y} translate {w} {h} scale\n"
+            f"{img.width} {img.height} 8 [{img.width} 0 0 -{img.height} 0 {img.height}]\n"
+            f"<{data}> image grestore\n")
+
+
+def email_ps() -> str:
+    banner = Image.new("L", (40, 6), 200)
+    pixel = Image.new("L", (1, 1), 0)
+    return "".join([
+        "%!PS\n",
+        "/Helvetica-Bold findfont 18 scalefont setfont 72 780 moveto (Your Ticket) show\n",
+        "/Helvetica findfont 11 scalefont setfont\n",
+        "72 760 moveto (Thanks for your order. Show the code below at the door to) show\n",
+        "72 746 moveto (collect your badge. We can't wait to see you there.) show\n",
+        ps_image(photo(), 72, 480, 451, 250),
+        ps_image(qr(), 222, 300, 150, 150),
+        ps_image(pixel, 300, 280, 1, 1),
+        ps_image(banner, 72, 200, 451, 60),
+        "/Helvetica-Bold findfont 14 scalefont setfont 90 225 moveto (Text over a banner image) show\n",
+        "/Helvetica findfont 11 scalefont setfont 72 170 moveto (See you soon!) show\n",
+        "showpage\n",
+    ])
+
+
 if __name__ == "__main__":
     # Pillow writes a one-page PDF with the image at this resolution
     photo().save(os.path.join(HERE, "photo.pdf"), resolution=100)
@@ -56,3 +87,9 @@ if __name__ == "__main__":
     logo = qr().convert("LA")
     logo.putalpha(qr().point(lambda v: 255 - v))  # white blocks transparent
     logo.save(os.path.join(HERE, "logo.png"))
+
+    ps = os.path.join(HERE, "email.ps")
+    with open(ps, "w") as f:
+        f.write(email_ps())
+    subprocess.run(["ps2pdf", "-sPAPERSIZE=a4", ps, os.path.join(HERE, "email.pdf")], check=True)
+    os.unlink(ps)

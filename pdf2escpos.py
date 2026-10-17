@@ -12,11 +12,12 @@ import re
 import sys
 import shlex
 import subprocess
+import tempfile
 import textwrap
 import unicodedata
 import xml.etree.ElementTree as ET
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -104,6 +105,7 @@ class Settings:
     dots: int           # image width in dots
     print_mode: str     # auto: pages without text print as images
     dither: str
+    embedded_images: bool
 
 
 def bounded_int(value: Optional[str], default: int, lo: int, hi: int) -> int:
@@ -196,6 +198,7 @@ def resolve_settings(argv: List[str], env: Dict[str, str]) -> Settings:
         dots=dots,
         print_mode=choice("PrintMode", PRINT_MODES),
         dither=choice("Dither", DITHER_METHODS),
+        embedded_images=raw.get("EmbeddedImages", "true").lower() in ("true", "on", "yes", "1"),
     )
 
 
@@ -359,6 +362,8 @@ def notice(message: str, settings: Settings) -> bytes:
 # into lines, lines into segments (runs that read as one piece of text),
 # and segments into blocks (consecutive lines of one paragraph or column).
 
+Box = Tuple[float, float, float, float]  # left, top, width, height in pdftohtml units
+
 @dataclass
 class Run:
     text: str
@@ -398,6 +403,7 @@ class Page:
     width: float
     height: float
     segments: List[Segment]
+    images: List["Box"] = field(default_factory=list)
 
 @dataclass
 class Block:
@@ -441,8 +447,13 @@ PRICE = re.compile(r"^(?P<label>.*?\S)\s*(?:\.{2,}|_{2,}|\s{3,})\s*"
 DOUBLE_SIZE_RATIO = 2.0
 DOUBLE_HEIGHT_RATIO = 1.4
 BOLD_HEADING_RATIO = 1.15
+HEADING_MAX_CHARS = 60    # longer text is never styled as a heading
 SMALL_TEXT_RATIO = 0.75   # smaller non-prose text (diagram labels) is dropped
 MARGIN_ZONE = 0.08        # top/bottom share of the page checked for headers/footers
+XML_ZOOM = 1.5            # pdftohtml units per PDF point
+MIN_IMAGE_PT = 12         # smaller images (spacers, tracking pixels, rules) are skipped
+FULL_WIDTH_FRACTION = 0.8 # images at least this share of the content width print full width
+MIN_IMAGE_FRACTION = 0.25 # and none prints narrower than this share of the paper
 
 
 def is_red(color: str) -> bool:
@@ -467,7 +478,7 @@ def collapse_repeats(s: str) -> str:
             i += 1
     return "".join(out)
 
-def parse_pdftohtml_xml(xml: bytes) -> List[Tuple[int, float, float, List[Run]]]:
+def parse_pdftohtml_xml(xml: bytes) -> List[Tuple[int, float, float, List[Run], List[Box]]]:
     # XML can't carry control characters; keep Word's \x01 bullets as bullets
     xml = xml.replace(b"\x01", "\u2022".encode())
     xml = re.sub(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]", b"", xml)
@@ -498,8 +509,11 @@ def parse_pdftohtml_xml(xml: bytes) -> List[Tuple[int, float, float, List[Run]]]
                 red=is_red(color),
                 bullet=bullet,
             ))
+        images = [(float(i.get("left", "0")), float(i.get("top", "0")),
+                   float(i.get("width", "0")), float(i.get("height", "0")))
+                  for i in page_el.iter("image")]
         pages.append((int(page_el.get("number", "0")), float(page_el.get("width", "0")),
-                      float(page_el.get("height", "0")), runs))
+                      float(page_el.get("height", "0")), runs, images))
     return pages
 
 def run_char_width(r: Run) -> float:
@@ -579,10 +593,10 @@ def build_segments(runs: List[Run], page: int, first_line_id: int) -> List[Segme
 def extract_pages(xml: bytes) -> List[Page]:
     pages = []
     line_id = 0
-    for number, width, height, runs in parse_pdftohtml_xml(xml):
+    for number, width, height, runs, images in parse_pdftohtml_xml(xml):
         segs = build_segments(runs, number, line_id)
         line_id += len(runs) + 1
-        pages.append(Page(number, width, height, segs))
+        pages.append(Page(number, width, height, segs, images))
     return pages
 
 
@@ -616,6 +630,32 @@ def drop_page_furniture(pages: List[Page]) -> None:
                 continue
             keep.append(s)
         p.segments = keep
+
+    # The same image in the margins of several pages is a running logo
+    def image_key(b: Box) -> Tuple[int, int, int]:
+        return round(b[0]), round(b[2]), round(b[3])
+
+    def image_in_margin(b: Box, p: Page) -> bool:
+        return b[1] < p.height * MARGIN_ZONE or b[1] + b[3] > p.height * (1 - MARGIN_ZONE)
+
+    margin_images = Counter(image_key(b) for p in pages for b in set(p.images) if image_in_margin(b, p))
+    for p in pages:
+        p.images = [b for b in p.images if not (image_in_margin(b, p) and margin_images[image_key(b)] > 1)]
+
+def useful_images(p: Page) -> List[Box]:
+    """Skip spacers and tracking pixels, and backgrounds that have text printed over them."""
+    out = []
+    for b in p.images:
+        x, y, w, h = b
+        if min(w, h) < MIN_IMAGE_PT * XML_ZOOM:
+            continue
+        inside = sum(len(s.text) for s in p.segments
+                     if x <= (s.left + s.right) / 2 <= x + w and y <= (s.top + s.bottom) / 2 <= y + h)
+        if inside > 20:
+            continue
+        if b not in out:
+            out.append(b)
+    return out
 
 def build_blocks(segs: List[Segment]) -> List[Block]:
     """Group consecutive lines of the same paragraph or column."""
@@ -664,9 +704,12 @@ def classify_blocks(blocks: List[Block]) -> None:
         else:
             b.kind = "rows"
 
-def size_style(size: float, body: float) -> Tuple[str, bool]:
-    """(ESC ! size, bold) for text of this font size."""
+def size_style(size: float, body: float, text: str = "") -> Tuple[str, bool]:
+    """(ESC ! size, bold) for text of this font size. Only short text is
+    treated as a heading; a long passage in a bigger font is body text."""
     ratio = size / body if body else 1.0
+    if len(text) > HEADING_MAX_CHARS:
+        return "", False
     if ratio >= DOUBLE_SIZE_RATIO:
         return "2W2H", True
     if ratio >= DOUBLE_HEIGHT_RATIO:
@@ -746,16 +789,28 @@ def segment_align(s: Segment, left: float, right: float) -> str:
     return "left"
 
 def layout_pages(pages: List[Page], settings: Settings,
-                 image_page: Callable[[int], List[PrintLine]]) -> List[PrintLine]:
-    """Lay out every page; pages chosen by PrintMode come from image_page instead."""
-    as_image = {p.number for p in pages
-                if settings.print_mode == "image" or (settings.print_mode == "auto" and not p.segments)}
+                 image_page: Callable[[int], List[PrintLine]],
+                 image_box: Callable[[int, Box, int, int], List[PrintLine]]) -> List[PrintLine]:
+    """Lay out every page. image_page(page) prints a whole page as one image;
+    image_box(page, box, width, offset) prints one embedded image."""
     drop_page_furniture(pages)
     body = body_size(pages)
+    paper = settings.dots - settings.dots % 8
     out: List[PrintLine] = []
 
+    # Embedded images are sized and placed against the content width of the
+    # whole document, so an image on a page without text keeps its size
+    edges = [(s.left, s.right) for p in pages for s in p.segments] + \
+            [(b[0], b[0] + b[2]) for p in pages for b in useful_images(p)]
+    doc_left = min((e[0] for e in edges), default=0.0)
+    doc_right = max((e[1] for e in edges), default=1.0)
+
     for p in pages:
-        if p.number in as_image:
+        images: List[Box] = []
+        if settings.print_mode != "text" and (settings.embedded_images or not p.segments):
+            images = useful_images(p)
+        if settings.print_mode == "image" or (settings.print_mode == "auto" and not p.segments and not images):
+            # A page with nothing but drawing (or PrintMode=Image) prints whole
             out.append(PrintLine())
             out += image_page(p.number)
             continue
@@ -768,13 +823,24 @@ def layout_pages(pages: List[Page], settings: Settings,
                 b.segs = [s for s in b.segs if s.size >= SMALL_TEXT_RATIO * body]
         blocks = [b for b in blocks if b.segs]
         kept = [s for b in blocks for s in b.segs]
-        if not kept:
+        if not kept and not images:
             continue
-        left = min(s.left for s in kept)
-        right = max(s.right for s in kept)
+        left = min([s.left for s in kept] + [b[0] for b in images])
+        right = max([s.right for s in kept] + [b[0] + b[2] for b in images])
 
         # Items to print, each (top, bottom, lines). Rows group segments by line.
         items: List[Tuple[float, float, List[PrintLine]]] = []
+
+        # Embedded images keep their size relative to the text, and their alignment
+        for box in images:
+            x, y, w, h = box
+            share = w / max(1.0, doc_right - doc_left)
+            width = paper if share >= FULL_WIDTH_FRACTION else \
+                int(min(paper, max(paper * MIN_IMAGE_FRACTION, share * paper)))
+            align = segment_align(Segment("", x, x + w, y, y + h, 0, False, False, p.number, -1),
+                                  doc_left, doc_right)
+            offset = {"left": 0, "right": paper - width}.get(align, (paper - width) // 2)
+            items.append((y, y + h, image_box(p.number, box, width, offset)))
         rows: Dict[int, List[Segment]] = {}
         for b in blocks:
             if b.kind == "rows":
@@ -784,9 +850,9 @@ def layout_pages(pages: List[Page], settings: Settings,
             lines: List[PrintLine] = []
             if b.kind == "prose":
                 for para in split_paragraphs(b):
-                    size, bold = size_style(max(s.size for s in para), body)
-                    width = settings.cols // 2 if size == "2W2H" else settings.cols
                     text = join_lines([s.text for s in para])
+                    size, bold = size_style(max(s.size for s in para), body, text)
+                    width = settings.cols // 2 if size == "2W2H" else settings.cols
                     hang = 0
                     m = BULLET.match(text)
                     if m:
@@ -796,7 +862,8 @@ def layout_pages(pages: List[Page], settings: Settings,
                     red = sum(len(s.text) for s in para if s.red) * 2 > len(text)
                     lines += [PrintLine(t, "left", bold, red, size) for t in wrap(text, width, hang)]
             else:
-                size, bold = size_style(max(s.size for s in b.segs), body)
+                size, bold = size_style(max(s.size for s in b.segs), body,
+                                        max((s.text for s in b.segs), key=len))
                 red = any(s.red for s in b.segs)
                 width = settings.cols // 2 if size == "2W2H" else settings.cols
                 aligns = {segment_align(s, left, right) for s in b.segs}
@@ -816,7 +883,7 @@ def layout_pages(pages: List[Page], settings: Settings,
             if len(segs) == 1 and RULE.match(segs[0].text):
                 items.append((top, bottom, [PrintLine("-" * settings.cols)]))
                 continue
-            size, bold = size_style(max(s.size for s in segs), body)
+            size, bold = size_style(max(s.size for s in segs), body, " ".join(s.text for s in segs))
             bold = bold or sum(len(s.text) for s in segs if s.bold) * 2 > sum(len(s.text) for s in segs)
             red = any(s.red for s in segs)
             width = settings.cols // 2 if size == "2W2H" else settings.cols
@@ -1028,15 +1095,40 @@ def fit_width(img: "Image.Image", dots: int) -> "Image.Image":
     canvas.paste(img.resize((width, MAX_IMAGE_ROWS), Image.Resampling.LANCZOS), ((dots - width) // 2, 0))
     return canvas
 
-def image_lines(img: "Image.Image", settings: Settings, what: str) -> List[PrintLine]:
-    """Prepare and dither a grayscale image that is already the paper width."""
+def image_lines(img: "Image.Image", settings: Settings, what: str, offset: int = 0) -> List[PrintLine]:
+    """Prepare and dither a grayscale image, placed `offset` dots from the left
+    of the paper. Auto dithering keeps QR codes as sharp black and white."""
     img = ImageOps.autocontrast(img, cutoff=1)
     method = choose_dither(img, settings.dither)
     if method != "threshold":
         gamma = settings.profile["image_gamma"]
         img = img.point([round(255 * (i / 255) ** gamma) for i in range(256)])
     log("DEBUG", f"{what}: image {img.width}x{img.height}, {method}")
-    return [PrintLine(image=raster_commands(dither(img, method)))]
+    bw = dither(img, method)
+    paper = settings.dots - settings.dots % 8
+    if bw.width < paper:
+        canvas = Image.new("1", (paper, bw.height), 1)
+        canvas.paste(bw, (max(0, min(offset, paper - bw.width)), 0))
+        bw = canvas
+    return [PrintLine(image=raster_commands(bw))]
+
+def box_image_lines(pdf_path: str, page: int, box: Box, width: int, offset: int,
+                    settings: Settings) -> List[PrintLine]:
+    """One image embedded in a page, cropped from the rendered page so it prints
+    exactly as drawn, `width` dots wide."""
+    if Image is None:
+        return []
+    x, y, w, h = box
+    # Render at twice the target size and scale down, for clean edges
+    dpi = min(1200.0, 72.0 * XML_ZOOM * 2 * width / max(1.0, w))
+    scale = dpi / 72 / XML_ZOOM
+    try:
+        img = render_page_gray(pdf_path, page, dpi, (
+            int(x * scale), int(y * scale), max(1, int(w * scale)), max(1, int(h * scale))))
+    except Exception as e:
+        log("WARNING", f"page {page}: embedded image not printed ({e})")
+        return []
+    return image_lines(fit_width(img, width), settings, f"page {page} embedded", offset)
 
 def image_page_lines(pdf_path: str, page: int, settings: Settings) -> List[PrintLine]:
     if Image is None:
@@ -1093,8 +1185,16 @@ def extract_print_lines(pdf_path: str, settings: Settings) -> List[PrintLine]:
     if not validate_pdf_path(pdf_path):
         raise ValueError(f"Invalid or inaccessible PDF path: {pdf_path}")
     try:
-        pages = extract_pages(run_poppler(["pdftohtml", "-xml", "-i", "-q", "-stdout", pdf_path]))
-        lines = layout_pages(pages, settings, lambda n: image_page_lines(pdf_path, n, settings))
+        # pdftohtml writes each image to a file next to its output, so give it
+        # a scratch directory; the XML gives the images' positions
+        with tempfile.TemporaryDirectory(prefix="pdf2escpos-") as tmp:
+            run_poppler(["pdftohtml", "-xml", "-q", "-zoom", str(XML_ZOOM), pdf_path, os.path.join(tmp, "out")])
+            with open(os.path.join(tmp, "out.xml"), "rb") as f:
+                pages = extract_pages(f.read())
+        lines = layout_pages(
+            pages, settings,
+            lambda n: image_page_lines(pdf_path, n, settings),
+            lambda n, box, width, offset: box_image_lines(pdf_path, n, box, width, offset, settings))
         log("DEBUG", f"laid out {len(pages)} page(s) from pdftohtml -xml")
         return lines
     except Exception as e:
@@ -1125,7 +1225,6 @@ def main() -> None:
     temp_file_created = False
     if infile == "-":
         # Read from stdin
-        import tempfile
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tf:
             tf.write(sys.stdin.buffer.read())
             pdf_path = tf.name

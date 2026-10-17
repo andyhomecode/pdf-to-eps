@@ -3,8 +3,10 @@
 #   python3 -m unittest discover tests
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -23,6 +25,7 @@ INVOICE_PDF = os.path.join(FIXTURES, "sample-invoice.pdf")
 TEXTBOOK_PDF = os.path.join(FIXTURES, "sample-textbook.pdf")
 PHOTO_PDF = os.path.join(FIXTURES, "photo.pdf")
 QR_PDF = os.path.join(FIXTURES, "qr.pdf")
+EMAIL_PDF = os.path.join(FIXTURES, "email.pdf")
 
 
 def argv(copies="1", options=""):
@@ -296,6 +299,44 @@ class TestImages(unittest.TestCase):
         # 200x200 QR blocks; transparent areas are white, and it stays sharp
         text = preview(os.path.join(FIXTURES, "logo.png"))
         self.assertIn("[IMG 576x256][IMG 576x256][IMG 576x64]", text)
+
+    def test_embedded_images(self):
+        text = preview(EMAIL_PDF)
+        # Photo full width, QR in proportion (150 of 451pt); the tracking pixel
+        # and the banner behind text are skipped
+        self.assertIn("Your Ticket", text)
+        self.assertIn("[IMG 576x256][IMG 576x63]\n[IMG 576x191]\n[B]Text over a banner image", text)
+        self.assertEqual(text.count("[IMG"), 3)
+
+    def test_embedded_qr_is_sharp_and_centered(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ESCPOS_")}
+        out = subprocess.run([sys.executable, FILTER, "1", "a", "t", "1", "", EMAIL_PDF],
+                             capture_output=True, env=env, timeout=60).stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            escpos_preview.Decoder(out, "cp437", tmp).run()
+            qr = f.Image.open(os.path.join(tmp, "image03.png")).convert("L")
+        left, top, right, bottom = f.ImageOps.invert(qr).getbbox()
+        self.assertAlmostEqual((left + right) / 2, 288, delta=4)
+        # Thresholded, not dithered: whole modules, so few isolated dots
+        px = qr.load()
+        lonely = sum(1 for y in range(1, qr.height - 1) for x in range(left + 1, right - 1)
+                     if all(px[x, y] != px[x + dx, y + dy] for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))))
+        self.assertLess(lonely, 10)
+
+    def test_embedded_images_off(self):
+        text = preview(EMAIL_PDF, "EmbeddedImages=False")
+        self.assertNotIn("[IMG", text)
+        self.assertIn("See you soon!", text)
+
+    def test_no_files_left_beside_input(self):
+        # pdftohtml writes extracted images next to its output; they must not
+        # land next to the input (a CUPS spool file)
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = os.path.join(tmp, "job.pdf")
+            shutil.copy(EMAIL_PDF, pdf)
+            subprocess.run([sys.executable, FILTER, "1", "a", "t", "1", "", pdf],
+                           capture_output=True, timeout=60)
+            self.assertEqual(os.listdir(tmp), ["job.pdf"])
 
     def test_58mm_images_are_narrower(self):
         self.assertIn("[IMG 416x", preview(PHOTO_PDF, "PageSize=Receipt58mm"))

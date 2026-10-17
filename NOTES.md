@@ -24,6 +24,8 @@ AirPrint doesn't show the custom menus (Columns, Character Set, Print Mode, Dith
 
 - **Image darkness:** `image_gamma` in the profile (0.8 on the Epson). Lower values lighten midtones. Impact printers spread more, so they'll need a lower value.
 - **Auto dither:** images with at least 90% of pixels near black or white are thresholded. Others get Atkinson. QR fixture: 94%, photo: 51%, text pages: 97-99%.
+- **QR codes in emails** stay scannable: on 2026-10-17 a Gmail ticket's QR printed at 441 dots (about 13 dots per module), and ZXing decoded the exact printed bits, even at half size.
+- **Embedded images:** the size rules are `FULL_WIDTH_FRACTION`, `MIN_IMAGE_FRACTION` and `MIN_IMAGE_PT` at the top of the Layout section.
 - **Layout thresholds** (top of the Layout section in `pdf2escpos.py`): heading size ratios, the 0.75× cutoff for dropping small diagram text, and the 8% page margin zone checked for headers and footers.
 
 ## Phase 2: Citizen CD-S500A
@@ -48,6 +50,7 @@ Plan:
 ## Ideas not done yet
 
 - Landscape photos print full width but short (a 4:3 photo is about 7 x 5 cm). They could be turned sideways to print larger along the paper.
-- Logos inside text pages (mixed pages) print as text only. The images on those pages could be printed inline.
+- Vector drawings (SVG logos in emails, charts) aren't printed on pages that have text. `pdftohtml` only reports raster images; finding drawings means rendering the page and looking for drawn areas that aren't text.
 - The CUPS Scaling option (Auto, Fit, Fill, None) is ignored.
 - A paragraph that continues onto the next page isn't joined across the page break.
+- Email headers (From, Reply-To, To) sometimes run together into one paragraph.

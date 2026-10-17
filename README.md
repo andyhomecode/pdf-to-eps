@@ -17,8 +17,9 @@ It runs on the ThinkCentre server as the filter for the `thermal-receipt` queue.
 - Page numbers, running headers and footers, and small diagram labels are left out. Fake bold (text drawn twice) is undone.
 - Control bytes are stripped, and characters the printer's code page lacks are mapped (smart quotes, dashes, `…`, ligatures) or have their accents removed. `?` is the last resort.
 
-**Images:** JPEG and PNG files, pages with no text, or every page with `PrintMode=Image`:
-- Turned upright from the photo's EXIF orientation, cropped to what's drawn (PDF pages) and scaled to the full paper width.
+**Images:** JPEG and PNG files, images embedded in PDFs (logos, photos and QR codes in emails and tickets), pages with nothing but drawing, or every page with `PrintMode=Image`:
+- Photos and image files are turned upright from their EXIF orientation and scaled to the full paper width.
+- Embedded images print where they sit in the text, at their size relative to the text (at least 80% of the content width prints full width, and nothing prints narrower than a quarter of the paper), keeping their alignment. They're cropped from the rendered page, so they print exactly as drawn. Images under 12pt (spacers, tracking pixels), images with text printed over them, and logos repeated in the page margins are skipped. Vector drawings (SVG logos, charts) aren't detected.
 - Dithered to 1 bit. `Auto` thresholds images that are almost all black and white, so QR codes and logos stay sharp. Everything else gets Atkinson dithering plus a gamma lift for thermal dot gain.
 - Sent as `GS v 0` raster bands. Photos print without a title line.
 
@@ -38,6 +39,7 @@ Settings come from, lowest to highest priority: the printer profile, the PPD's d
 | `PageSize` | Receipt80mm, Receipt58mm (58mm caps columns at 35 and images at 416 dots) | Receipt80mm |
 | `PrintMode` | Auto (pages without text print as images), Text, Image | Auto |
 | `Dither` | Auto, Atkinson, Floyd-Steinberg, Threshold | Auto |
+| `EmbeddedImages` (Print Images in Documents) | True, False | True |
 | `PrintTitle` | True, False | True |
 
 AirPrint clients (iPhone, Mac) only show standard options such as copies and Scaling. For their jobs, change a default on the CUPS web page: http://localhost:631/printers/thermal-receipt, Administration → Set Default Options. Linux print dialogs show the menus under Printer Options, and `lp -o Name=Value` sets them per job.
@@ -94,7 +96,7 @@ python3 tools/escpos_preview.py --png-dir /tmp/imgs out.escpos   # also save ima
 lp -d thermal-receipt -o raw out.escpos
 ```
 
-Fixtures are in `tests/fixtures/`. `receipt.pdf` is built from `receipt.ps` with `ps2pdf`, and the image fixtures come from `make_image_fixtures.py`. `sample-invoice.pdf` and `sample-textbook.pdf` are real-world layouts.
+Fixtures are in `tests/fixtures/`. `receipt.pdf` is built from `receipt.ps` with `ps2pdf`, and the image fixtures (including `email.pdf`, text with embedded images) come from `make_image_fixtures.py`. `sample-invoice.pdf` and `sample-textbook.pdf` are real-world layouts.
 
 The filter logs to the CUPS error log as `pdf2escpos:`: the settings used, which extraction path ran, and each image's size and dither method. `DEBUG` lines need `sudo cupsctl --debug-logging` (turn it off afterwards with `--no-debug-logging`). Then run `sudo tail -f /var/log/cups/error_log`.
 

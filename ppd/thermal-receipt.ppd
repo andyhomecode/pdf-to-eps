@@ -67,6 +67,12 @@
 *Dither Threshold/Threshold (QR codes, logos): ""
 *CloseUI: *Dither
 
+*OpenUI *EmbeddedImages/Print Images in Documents: Boolean
+*DefaultEmbeddedImages: True
+*EmbeddedImages True/Yes: ""
+*EmbeddedImages False/No: ""
+*CloseUI: *EmbeddedImages
+
 *OpenUI *PrintTitle/Print Job Title: Boolean
 *DefaultPrintTitle: True
 *PrintTitle True/Yes: ""
