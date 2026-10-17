@@ -51,6 +51,10 @@ Plan:
 - An `escp` command set in the renderer: 80 or 136 columns depending on pitch, a form feed per page instead of a cut, `ESC E` bold, `ESC W` double width, `ESC *` 8-pin graphics for image pages, and the ESC/P code page command.
 - Its own PPD and queue, connected by USB-B to the ThinkCentre or the same Pi as the Citizen.
 
+## CUPS and PPDs
+
+`lpadmin -P` warns "Printer drivers are deprecated and will stop working in a future version of CUPS". CUPS 2.4 (Ubuntu 24.04) still supports PPD queues fully. CUPS 3 plans to drop them for "printer applications" (PAPPL), small services that appear on the network as driverless IPP printers. When an Ubuntu release with CUPS 3 comes, the filter's logic can move into a printer application that hands it the same PDF, JPEG and PNG input. Only the PPD and the queue setup would need replacing.
+
 ## Ideas not done yet
 
 - Landscape photos print full width but short (a 4:3 photo is about 7 x 5 cm). They could be turned sideways to print larger along the paper.
