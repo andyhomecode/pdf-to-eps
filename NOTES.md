@@ -55,6 +55,14 @@ Plan:
 
 `lpadmin -P` warns "Printer drivers are deprecated and will stop working in a future version of CUPS". CUPS 2.4 (Ubuntu 24.04) still supports PPD queues fully. CUPS 3 plans to drop them for "printer applications" (PAPPL), small services that appear on the network as driverless IPP printers. When an Ubuntu release with CUPS 3 comes, the filter's logic can move into a printer application that hands it the same PDF, JPEG and PNG input. Only the PPD and the queue setup would need replacing.
 
+**Fallback if CUPS stops running this filter: [LPrint](https://github.com/michaelrsweet/lprint).** It's a PAPPL printer application by Michael Sweet, CUPS's author. Since v1.4.0 (June 2026) it has an ESC/POS driver for Epson TM-series printers, and it appears as a driverless IPP Everywhere printer to iPhones, Macs, Android and Windows. Looked at on 2026-10-17 and not adopted, because:
+- It takes only raster, PNG or raw data, not PDF, so there's no text reflow. The `thermal-receipt-text` queue has no equivalent.
+- What it would replace is the as-drawn queue (`thermal-receipt`), since the iPhone rasterizes the page itself.
+- Untested: how its dithering treats text and QR codes, whether it trims blank paper at page ends, and whether iOS crops photos to fill the page as CUPS's image filter did.
+- Its ESC/POS driver was new, and the README warned that master had known issues.
+
+If a CUPS upgrade blocks PPD queues before this filter is ported to a printer application, the quickest way to keep printing from phones is LPrint pointed at `socket://192.168.1.16:9100`. Compare its prints with this filter's on the corpus samples (Fujikina ticket, Citizens page, a photo) before switching. The text queue would need this filter ported to PAPPL, or a CUPS raw queue fed by `pdf2escpos.py` from a script.
+
 ## Ideas not done yet
 
 - Landscape photos print full width but short (a 4:3 photo is about 7 x 5 cm). They could be turned sideways to print larger along the paper.
