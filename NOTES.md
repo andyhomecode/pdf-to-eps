@@ -54,3 +54,4 @@ Plan:
 - The CUPS Scaling option (Auto, Fit, Fill, None) is ignored.
 - A paragraph that continues onto the next page isn't joined across the page break.
 - Email headers (From, Reply-To, To) sometimes run together into one paragraph.
+- Separate short lines can join into one paragraph when each item fills its line, as with the meeting dates in a 2026-10-17 village notice. Position alone can't tell these from wrapped text.

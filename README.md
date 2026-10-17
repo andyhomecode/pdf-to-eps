@@ -13,7 +13,7 @@ It runs on the ThinkCentre server as the filter for the `thermal-receipt` queue.
 - Bullet and numbered items wrap with a hanging indent. Word's Symbol-font bullets print as `*`.
 - Label/value rows, table rows and dot-leader prices (`Latte ...... $4.50`) print with the value right-aligned. Lines of `-`, `_`, `=` or `*` print as one full-width rule.
 - Short-line columns, such as an address, keep their line breaks.
-- Headings print double height (1.4× the body size) or double size (2×). Bold text prints bold. Red text prints red on printers that have it, otherwise bold. Centered and right-aligned lines keep their alignment.
+- Headings print double height (1.4× the body size) or double size (2×). Bold text prints bold, including bold words inside a paragraph (recognised from `<b>` markup, font names and variable-font weights such as iOS's system font). Red text prints red on printers that have it, otherwise bold. Centered and right-aligned lines keep their alignment.
 - Page numbers, running headers and footers, and small diagram labels are left out. Fake bold (text drawn twice) is undone.
 - Control bytes are stripped, and characters the printer's code page lacks are mapped (smart quotes, dashes, `…`, ligatures) or have their accents removed. `?` is the last resort.
 

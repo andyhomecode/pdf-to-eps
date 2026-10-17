@@ -26,6 +26,7 @@ TEXTBOOK_PDF = os.path.join(FIXTURES, "sample-textbook.pdf")
 PHOTO_PDF = os.path.join(FIXTURES, "photo.pdf")
 QR_PDF = os.path.join(FIXTURES, "qr.pdf")
 EMAIL_PDF = os.path.join(FIXTURES, "email.pdf")
+NOTICE_PDF = os.path.join(FIXTURES, "notice.pdf")
 
 
 def argv(copies="1", options=""):
@@ -103,6 +104,10 @@ class TestSanitize(unittest.TestCase):
 
     def test_cjk(self):
         self.assertEqual(f.sanitize("\u4e2d\u3001\uff0c", "cp437"), "?,,")
+
+    def test_superscript_letters(self):
+        # 20th and 22nd as iOS writes them; superscript digits stay
+        self.assertEqual(f.sanitize("20\u1d57\u02b0 22\u207f\u1d48 10mm\u00b2", "cp437"), "20th 22nd 10mm\u00b2")
 
     def test_invisible(self):
         self.assertEqual(f.sanitize("a\u200bb\u00adc\ufeff\ufffd", "cp437"), "abc?")
@@ -190,6 +195,23 @@ class TestLayoutHelpers(unittest.TestCase):
         self.assertTrue(seg.bold)
         self.assertTrue(seg.red)
 
+    def test_bold_font_names(self):
+        self.assertTrue(f.is_bold_font("AAAAAB+.SFUI-Regular_wdth_opsz110000_GRAD_wght2BC0000"))  # 700
+        self.assertTrue(f.is_bold_font("AAAAAB+.SFUI-Regular_wdth_opsz110000_GRAD_wght2580000"))  # 600
+        self.assertFalse(f.is_bold_font("AAAAAC+.SFUI-Regular_wdth_opsz110000_GRAD_wght"))
+        self.assertFalse(f.is_bold_font("X+.SFUI-Regular_wght1900000"))  # 400
+        self.assertTrue(f.is_bold_font("PXAAAC+Gelasio_700wght"))
+        self.assertTrue(f.is_bold_font("Helvetica-Bold"))
+        self.assertFalse(f.is_bold_font("Helvetica"))
+
+    def test_wrap_words(self):
+        words = [("PLEASE", True), ("TAKE", True), ("NOTICE", True), ("that", False), ("Special", False)]
+        self.assertEqual(f.wrap_words(words, 24),
+                         [[("PLEASE TAKE NOTICE", True), (" that", False)], [("Special", False)]])
+        # Hanging indent, and a long word broken at a hyphen
+        self.assertEqual(f.wrap_words([("*", False), ("aa", False), ("bbbb-cccc", False)], 8, hang=2),
+                         [[("* aa", False)], [("  bbbb-", False)], [("  cccc", False)]])
+
     def test_fit_row(self):
         seg = lambda text, left, right: f.Segment(text, left, right, 0, 10, 10, False, False, 1, 1)
         self.assertEqual(f.fit_row([seg("Total", 0, 50), seg("$9.99", 400, 450)], 20),
@@ -223,6 +245,12 @@ class TestLayout(unittest.TestCase):
         self.assertIn("Total" + " " * 32 + "USD $950.00", text)
         self.assertIn("YesLogic Pty. Ltd.\n7 / 39 Bouverie St\n", text)  # address kept together
         self.assertNotRegex(text, r"\n +\n")  # no lines of only spaces
+
+    def test_inline_bold(self):
+        text = preview(NOTICE_PDF)
+        self.assertIn("[B]PLEASE TAKE NOTICE[/B] that Special Meetings of", text)
+        self.assertIn("[B]BY ORDER OF THE MAYOR OF THE VILLAGE\n[/B]", text)
+        self.assertEqual(text.count("[B]"), 2)
 
     def test_textbook(self):
         text = preview(TEXTBOOK_PDF)

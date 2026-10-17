@@ -251,6 +251,10 @@ def sanitize(s: str, codec: str) -> str:
             out.append(ALWAYS_MAP[ch])
         elif ord(ch) < 0x20 or 0x7f <= ord(ch) <= 0x9f:
             continue  # C0/C1 control: a stray ESC or GS would be read as a command
+        elif unicodedata.category(ch) == "Lm" and unicodedata.decomposition(ch).startswith("<super>"):
+            # Superscript letters (22nd written as 22\u207f\u1d48) print as plain
+            # letters; superscript digits like \u00b2 stay as they are
+            out.append(unicodedata.normalize("NFKD", ch))
         elif encodable(ch, codec):
             out.append(ch)
         elif ch in CHAR_MAP:
@@ -363,6 +367,7 @@ def notice(message: str, settings: Settings) -> bytes:
 # and segments into blocks (consecutive lines of one paragraph or column).
 
 Box = Tuple[float, float, float, float]  # left, top, width, height in pdftohtml units
+Word = Tuple[str, bool]                  # a word and whether it's bold
 
 @dataclass
 class Run:
@@ -388,6 +393,7 @@ class Segment:
     red: bool
     page: int
     line_id: int
+    words: List["Word"] = field(default_factory=list)  # the text as (word, bold)
 
     @property
     def char_width(self) -> float:
@@ -429,13 +435,18 @@ class PrintLine:
     raw: bool = False
     cut: bool = False
     image: bytes = b""    # raster commands for an image page
+    spans: List[Word] = field(default_factory=list)  # text with bold switched mid-line
 
     @property
     def blank(self) -> bool:
         return not (self.text or self.cut or self.image)
 
 
-BOLD_FONT = re.compile(r"bold|black|heavy|semibold|demi|[6-9]00", re.I)
+BOLD_FONT = re.compile(r"bold|black|heavy|semibold|demi|(?<![0-9a-f])[6-9]00(?![0-9])", re.I)
+# Variable fonts carry their weight in the name, e.g. Apple's system font in
+# iOS PDFs: ".SFUI-Regular_wdth_opsz110000_GRAD_wght2BC0000" is weight 0x2BC = 700
+# (16.16 fixed point). Needs pdftohtml -fontfullname to see the whole name.
+VARIABLE_WEIGHT = re.compile(r"wght([0-9A-Fa-f]{5,8})")
 MARKERS = ("[CENTER]", "[LEFT]", "[RIGHT]", "[B]", "[U]", "[CUT]")
 PAGE_NUMBER = re.compile(r"^(page\s*)?\d{1,4}(\s*(of|/)\s*\d{1,4})?$", re.I)
 RULE = re.compile(r"^([-_=*~.]\s?){3,}$")
@@ -455,6 +466,12 @@ MIN_IMAGE_PT = 12         # smaller images (spacers, tracking pixels, rules) are
 FULL_WIDTH_FRACTION = 0.8 # images at least this share of the content width print full width
 MIN_IMAGE_FRACTION = 0.25 # and none prints narrower than this share of the paper
 
+
+def is_bold_font(family: str) -> bool:
+    if BOLD_FONT.search(family):
+        return True
+    m = VARIABLE_WEIGHT.search(family)
+    return bool(m) and int(m.group(1), 16) / 65536 >= 600
 
 def is_red(color: str) -> bool:
     try:
@@ -478,6 +495,15 @@ def collapse_repeats(s: str) -> str:
             i += 1
     return "".join(out)
 
+def text_pieces(el: ET.Element, bold: bool = False) -> List[Word]:
+    """An element's text as (text, bold) pieces, bold inside <b> tags."""
+    pieces = [(el.text, bold)] if el.text else []
+    for child in el:
+        pieces += text_pieces(child, bold or child.tag == "b")
+        if child.tail:
+            pieces.append((child.tail, bold))
+    return pieces
+
 def parse_pdftohtml_xml(xml: bytes) -> List[Tuple[int, float, float, List[Run], List[Box]]]:
     # XML can't carry control characters; keep Word's \x01 bullets as bullets
     xml = xml.replace(b"\x01", "\u2022".encode())
@@ -498,17 +524,31 @@ def parse_pdftohtml_xml(xml: bytes) -> List[Tuple[int, float, float, List[Run], 
                 continue
             size, family, color = fonts.get(t.get("font", ""), (0.0, "", "#000000"))
             height = float(t.get("height", "0"))
-            runs.append(Run(
-                text="\u2022" if bullet else text,
-                left=float(t.get("left", "0")),
-                top=float(t.get("top", "0")),
-                width=float(t.get("width", "0")),
-                height=height,
-                size=size or height,
-                bold=t.find(".//b") is not None or bool(BOLD_FONT.search(family)),
-                red=is_red(color),
-                bullet=bullet,
-            ))
+            left = float(t.get("left", "0"))
+            width = float(t.get("width", "0"))
+            # pdftohtml merges a bold phrase and the regular text after it into
+            # one element, marking the bold part with <b>. Without <b> tags,
+            # the font name says (pdftohtml doesn't recognise every bold font).
+            if t.find(".//b") is not None:
+                pieces = text_pieces(t)
+            else:
+                pieces = [("\u2022" if bullet else text, is_bold_font(family))]
+            # Split the element's width between the pieces by character count
+            total = sum(len(p) for p, _ in pieces) or 1
+            for piece, bold in pieces:
+                piece_width = width * len(piece) / total
+                runs.append(Run(
+                    text=piece,
+                    left=left,
+                    top=float(t.get("top", "0")),
+                    width=piece_width,
+                    height=height,
+                    size=size or height,
+                    bold=bold,
+                    red=is_red(color),
+                    bullet=bullet,
+                ))
+                left += piece_width
         images = [(float(i.get("left", "0")), float(i.get("top", "0")),
                    float(i.get("width", "0")), float(i.get("height", "0")))
                   for i in page_el.iter("image")]
@@ -520,20 +560,17 @@ def run_char_width(r: Run) -> float:
     return max(1.0, r.width / max(1, len(r.text)))
 
 def make_segment(runs: List[Run], page: int, line_id: int) -> Segment:
-    parts = [runs[0].text]
+    # Each character with its run's boldness, so bold words inside a line survive
+    chars: List[Word] = [(c, runs[0].bold) for c in runs[0].text]
     overlapped = False
     for a, b in zip(runs, runs[1:]):
         gap = b.left - (a.left + a.width)
         cw = min(run_char_width(a), run_char_width(b))
         if gap < -0.5 * cw:
             overlapped = True
-        elif gap > 0.25 * cw and not parts[-1].endswith(" ") and not b.text.startswith(" "):
-            parts.append(" ")
-        parts.append(b.text)
-    text = "".join(parts)
-    if overlapped:
-        text = collapse_repeats(text)
-    text = re.sub(r"\s+", " ", text).strip()
+        elif gap > 0.25 * cw and not chars[-1][0].isspace() and not b.text[:1].isspace():
+            chars.append((" ", False))
+        chars += [(c, b.bold) for c in b.text]
 
     # Size, bold and red go by what most of the characters are
     by_size: Counter = Counter()
@@ -543,6 +580,24 @@ def make_segment(runs: List[Run], page: int, line_id: int) -> Segment:
         bold_chars += len(r.text) if r.bold else 0
         red_chars += len(r.text) if r.red else 0
     total = sum(len(r.text) for r in runs)
+    bold = bold_chars * 2 > total
+
+    if overlapped:
+        text = collapse_repeats("".join(c for c, _ in chars))
+        words = [(w, bold) for w in text.split()]
+    else:
+        # A word is bold when most of its characters are
+        words = []
+        word, flags = "", []
+        for c, f in chars + [(" ", False)]:
+            if c.isspace():
+                if word:
+                    words.append((word, sum(flags) * 2 > len(flags)))
+                word, flags = "", []
+            else:
+                word += c
+                flags.append(f)
+    text = " ".join(w for w, _ in words)
     return Segment(
         text=text,
         left=min(r.left for r in runs),
@@ -550,10 +605,11 @@ def make_segment(runs: List[Run], page: int, line_id: int) -> Segment:
         top=min(r.top for r in runs),
         bottom=max(r.top + r.height for r in runs),
         size=by_size.most_common(1)[0][0],
-        bold=bold_chars * 2 > total,
+        bold=bold,
         red=red_chars * 2 > total,
         page=page,
         line_id=line_id,
+        words=words,
     )
 
 def build_segments(runs: List[Run], page: int, first_line_id: int) -> List[Segment]:
@@ -731,12 +787,77 @@ def join_lines(texts: List[str]) -> str:
             out = f"{out} {t}" if out else t
     return out
 
+def join_words(segs: List[Segment]) -> List[Word]:
+    """join_lines for words that carry their boldness."""
+    out: List[Word] = []
+    for s in segs:
+        words = list(s.words) or [(w, s.bold) for w in s.text.split()]
+        if out and words and re.search(r"[a-z]-$", out[-1][0]) and words[0][0][:1].islower():
+            out[-1] = (out[-1][0][:-1] + words[0][0], out[-1][1])
+            words = words[1:]
+        out += words
+    return out
+
+def wrap_words(words: List[Word], width: int, hang: int = 0) -> List[List[Word]]:
+    """Greedy word wrap that keeps each word's boldness. Returns lines as
+    spans of (text, bold); continuation lines are indented by `hang`. A word
+    too long for a line is broken, at a hyphen if one fits."""
+    width = max(1, width)
+    hang = hang if hang < width else 0
+    lines: List[List[Word]] = []
+    cur: List[Word] = []
+    used = 0
+    started = False
+
+    def new_line() -> None:
+        nonlocal cur, used, started
+        lines.append(cur)
+        cur = [(" " * hang, False)] if hang else []
+        used, started = hang, False
+
+    for w, b in words:
+        while w:
+            sep = 1 if started else 0
+            room = width - used - sep
+            if len(w) <= room:
+                if sep:
+                    cur.append((" ", b and cur[-1][1]))
+                cur.append((w, b))
+                used += sep + len(w)
+                started = True
+                w = ""
+            elif started or room <= 0:
+                # Doesn't fit here: next line, breaking it there if it must
+                new_line()
+            else:
+                cut = w.rfind("-", 0, room) + 1 or room
+                if sep:
+                    cur.append((" ", False))
+                cur.append((w[:cut], b))
+                w = w[cut:]
+                new_line()
+    if started or not lines:
+        lines.append(cur)
+
+    # Merge neighbouring spans of the same weight
+    merged: List[List[Word]] = []
+    for line in lines:
+        spans: List[Word] = []
+        for t, b in line:
+            if spans and spans[-1][1] == b:
+                spans[-1] = (spans[-1][0] + t, b)
+            else:
+                spans.append((t, b))
+        merged.append(spans)
+    return merged
+
 def split_paragraphs(block: Block) -> List[List[Segment]]:
     """Split a prose block where a line is short, starts a bullet, or is indented."""
     paras: List[List[Segment]] = []
     full_right = block.right
     for s in block.segs:
-        first_word = len(s.text.split(" ", 1)[0]) + 1
+        # A space is about half an average character in proportional fonts
+        first_word = len(s.text.split(" ", 1)[0]) + 0.5
         # Lines indented under a bullet item's text continue the item
         under_bullet = (paras and BULLET.match(paras[-1][0].text)
                         and s.left - paras[-1][0].left > 1.5 * s.char_width)
@@ -850,17 +971,18 @@ def layout_pages(pages: List[Page], settings: Settings,
             lines: List[PrintLine] = []
             if b.kind == "prose":
                 for para in split_paragraphs(b):
-                    text = join_lines([s.text for s in para])
+                    words = join_words(para)
+                    text = " ".join(w for w, _ in words)
                     size, bold = size_style(max(s.size for s in para), body, text)
                     width = settings.cols // 2 if size == "2W2H" else settings.cols
-                    hang = 0
-                    m = BULLET.match(text)
-                    if m:
-                        text = m.group(1) + " " + text[m.end():]
-                        hang = len(m.group(1)) + 1
-                    bold = bold or sum(len(s.text) for s in para if s.bold) * 2 > len(text)
+                    hang = len(words[0][0]) + 1 if BULLET.match(text) else 0
+                    # Mostly bold prints all bold; otherwise bold words stay bold
+                    bold = bold or sum(len(w) for w, wb in words if wb) * 2 > len(text)
                     red = sum(len(s.text) for s in para if s.red) * 2 > len(text)
-                    lines += [PrintLine(t, "left", bold, red, size) for t in wrap(text, width, hang)]
+                    for spans in wrap_words(words, width, hang):
+                        inline = [] if bold or not any(sb for _, sb in spans) else spans
+                        lines.append(PrintLine("".join(t for t, _ in spans), "left", bold, red, size,
+                                               spans=inline))
             else:
                 size, bold = size_style(max(s.size for s in b.segs), body,
                                         max((s.text for s in b.segs), key=len))
@@ -948,7 +1070,18 @@ def render_line(pl: PrintLine, settings: Settings) -> bytes:
         out += bold_on()
     if pl.red and settings.profile["red"]:
         out += ESC + b'r' + b'\x01'
-    out += encode_text(pl.text, settings) + lf()
+    if pl.spans:
+        on = False
+        for t, b in pl.spans:
+            if b != on:
+                out += bold_on() if b else bold_off()
+                on = b
+            out += encode_text(t, settings)
+        if on:
+            out += bold_off()
+        out += lf()
+    else:
+        out += encode_text(pl.text, settings) + lf()
     if pl.red and settings.profile["red"]:
         out += ESC + b'r' + b'\x00'
     if pl.bold or pl.red:
@@ -1188,7 +1321,8 @@ def extract_print_lines(pdf_path: str, settings: Settings) -> List[PrintLine]:
         # pdftohtml writes each image to a file next to its output, so give it
         # a scratch directory; the XML gives the images' positions
         with tempfile.TemporaryDirectory(prefix="pdf2escpos-") as tmp:
-            run_poppler(["pdftohtml", "-xml", "-q", "-zoom", str(XML_ZOOM), pdf_path, os.path.join(tmp, "out")])
+            run_poppler(["pdftohtml", "-xml", "-q", "-fontfullname", "-zoom", str(XML_ZOOM),
+                         pdf_path, os.path.join(tmp, "out")])
             with open(os.path.join(tmp, "out.xml"), "rb") as f:
                 pages = extract_pages(f.read())
         lines = layout_pages(

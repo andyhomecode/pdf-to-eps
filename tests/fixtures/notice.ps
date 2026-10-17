@@ -1,0 +1,14 @@
+%!PS
+% Source for notice.pdf: a bold phrase inside a regular paragraph, and a
+% fully bold line. Rebuild with:
+%   ps2pdf -sPAPERSIZE=a4 tests/fixtures/notice.ps tests/fixtures/notice.pdf
+
+/Helvetica-Bold findfont 11 scalefont setfont
+72 760 moveto (PLEASE TAKE NOTICE) show
+/Helvetica findfont 11 scalefont setfont
+( that Special Meetings of the Board of Trustees will take place) show
+72 746 moveto (on the dates and locations noted below.) show
+
+/Helvetica-Bold findfont 11 scalefont setfont
+72 714 moveto (BY ORDER OF THE MAYOR OF THE VILLAGE) show
+showpage
