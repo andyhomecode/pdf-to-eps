@@ -909,8 +909,9 @@ def render_document(lines: List[PrintLine], title: str, settings: Settings) -> b
     if settings.header:
         out += align_center() + bold_on() + encode_text(settings.header, settings) + bold_off() + lf()
 
-    # Optional title line (trim to width)
-    if title and settings.print_title:
+    # Optional title line (trim to width). Photos and other image-only
+    # documents print just the image.
+    if title and settings.print_title and any(pl.text for pl in lines):
         out += align_center() + underline_on() + encode_text(title, settings)[:settings.cols] + underline_off() + lf(2)
 
     for pl in tidy(lines):

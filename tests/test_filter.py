@@ -286,6 +286,11 @@ class TestImages(unittest.TestCase):
         # Stored 300x400 sideways with EXIF orientation 6: prints 400x300 upright, scaled to 576
         text = preview(os.path.join(FIXTURES, "rotated.jpg"))
         self.assertIn("[IMG 576x256][IMG 576x176]", text)
+        self.assertNotIn("Test", text)  # no title on photos
+
+    def test_image_only_pdf_has_no_title(self):
+        self.assertNotIn("Test", preview(PHOTO_PDF))
+        self.assertIn("[U]Test[/U]", preview(RECEIPT_PDF))
 
     def test_png_with_transparency(self):
         # 200x200 QR blocks; transparent areas are white, and it stays sharp
