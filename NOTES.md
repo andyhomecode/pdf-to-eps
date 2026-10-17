@@ -4,7 +4,7 @@
 
 | Printer | Type | Connection | Queue | Status |
 |---|---|---|---|---|
-| Epson TM-T20II | Thermal receipt, 80mm, 203 dpi, autocutter | Ethernet, `socket://192.168.1.16:9100` (the "receipt" box on the LAN) | `thermal-receipt` | In use, shared over AirPrint |
+| Epson TM-T20II | Thermal receipt, 80mm, 203 dpi, autocutter | Ethernet, `socket://192.168.1.16:9100` (the "receipt" box on the LAN) | `thermal-receipt` (80mm, as drawn) and `thermal-receipt-text` (Letter, reflowed) | In use, shared over AirPrint |
 | Citizen CD-S500A | 9-pin impact receipt, ESC/POS, USB-B, probably 76mm paper, maybe a red/black ribbon | Not connected yet | `receipt-citizen` (planned) | Phase 2 |
 | OKI ML420 | 9-pin dot matrix, Epson FX / IBM emulation (ESC/P, not ESC/POS), USB-B | Not connected yet | its own queue (planned) | Phase 3 |
 

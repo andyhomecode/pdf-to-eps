@@ -68,6 +68,13 @@ class TestSettings(unittest.TestCase):
         s = f.resolve_settings(argv(options="PageSize=Receipt58mm EscposCols=32"), {})
         self.assertEqual(s.cols, 32)
 
+    def test_letter_and_a4_paper(self):
+        # The text queue's Letter/A4 paper: full 48 columns and 576 dots, and the
+        # 80mm width is still what marks a page as laid out for the receipt
+        for size in ("Letter", "A4"):
+            s = f.resolve_settings(argv(options=f"PageSize={size}"), {"PPD": PPD})
+            self.assertEqual((s.cols, s.dots, s.paper_pt), (48, 576, 226.77))
+
     def test_codepage(self):
         s = f.resolve_settings(argv(options="EscposCodepage=cp858"), {})
         self.assertEqual((s.codec, s.codepage_n), ("cp858", 19))
@@ -340,6 +347,12 @@ class TestImages(unittest.TestCase):
         self.assertNotIn("Citizens", text)
         self.assertRegex(text, r"^\[INIT\]\[FONT A\]\[LINESPACE default\]\[CODEPAGE 0\]\[IMG 576x")
         self.assertEqual(preview(WEBPAGE_PDF, "PrintMode=Text").count("[IMG"), 0)
+
+    def test_letter_job_is_reflowed(self):
+        # A job on the text queue: an A4/Letter page is laid out as text
+        text = preview(RECEIPT_PDF, "PageSize=Letter")
+        self.assertIn("Latte" + " " * 38 + "$4.50", text)
+        self.assertNotIn("[IMG", text)
 
     def test_as_drawn_page_is_sharp_and_full_width(self):
         env = {k: v for k, v in os.environ.items() if not k.startswith("ESCPOS_")}
