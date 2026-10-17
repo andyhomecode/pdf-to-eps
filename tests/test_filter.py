@@ -282,6 +282,16 @@ class TestImages(unittest.TestCase):
         self.assertNotIn("[IMG", text)
         self.assertIn("This PDF has no text", text)
 
+    def test_jpeg_input_prints_whole_upright(self):
+        # Stored 300x400 sideways with EXIF orientation 6: prints 400x300 upright, scaled to 576
+        text = preview(os.path.join(FIXTURES, "rotated.jpg"))
+        self.assertIn("[IMG 576x256][IMG 576x176]", text)
+
+    def test_png_with_transparency(self):
+        # 200x200 QR blocks; transparent areas are white, and it stays sharp
+        text = preview(os.path.join(FIXTURES, "logo.png"))
+        self.assertIn("[IMG 576x256][IMG 576x256][IMG 576x64]", text)
+
     def test_58mm_images_are_narrower(self):
         self.assertIn("[IMG 416x", preview(PHOTO_PDF, "PageSize=Receipt58mm"))
 

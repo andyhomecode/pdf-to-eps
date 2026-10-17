@@ -956,14 +956,7 @@ def page_image(pdf_path: str, page: int, dots: int) -> Optional["Image.Image"]:
         int(left * scale), int(top * scale),
         int((right - left) * scale) + 1, int((bottom - top) * scale) + 1))
 
-    height = max(1, round(img.height * dots / img.width))
-    if height <= MAX_IMAGE_ROWS:
-        return img.resize((dots, height), Image.Resampling.LANCZOS)
-    # Too tall: shrink to fit and center it on the paper width
-    width = max(8, round(img.width * MAX_IMAGE_ROWS / img.height))
-    canvas = Image.new("L", (dots, MAX_IMAGE_ROWS), 255)
-    canvas.paste(img.resize((width, MAX_IMAGE_ROWS), Image.Resampling.LANCZOS), ((dots - width) // 2, 0))
-    return canvas
+    return fit_width(img, dots)
 
 def choose_dither(img: "Image.Image", setting: str) -> str:
     """Auto: threshold images that are almost all black and white (QR codes,
@@ -1024,6 +1017,26 @@ def raster_commands(bw: "Image.Image") -> bytes:
         out += data[y * row_bytes:(y + rows) * row_bytes]
     return bytes(out)
 
+def fit_width(img: "Image.Image", dots: int) -> "Image.Image":
+    """Scale to exactly `dots` wide; if that's too tall, shrink to fit and center."""
+    height = max(1, round(img.height * dots / img.width))
+    if height <= MAX_IMAGE_ROWS:
+        return img.resize((dots, height), Image.Resampling.LANCZOS)
+    width = max(8, round(img.width * MAX_IMAGE_ROWS / img.height))
+    canvas = Image.new("L", (dots, MAX_IMAGE_ROWS), 255)
+    canvas.paste(img.resize((width, MAX_IMAGE_ROWS), Image.Resampling.LANCZOS), ((dots - width) // 2, 0))
+    return canvas
+
+def image_lines(img: "Image.Image", settings: Settings, what: str) -> List[PrintLine]:
+    """Prepare and dither a grayscale image that is already the paper width."""
+    img = ImageOps.autocontrast(img, cutoff=1)
+    method = choose_dither(img, settings.dither)
+    if method != "threshold":
+        gamma = settings.profile["image_gamma"]
+        img = img.point([round(255 * (i / 255) ** gamma) for i in range(256)])
+    log("DEBUG", f"{what}: image {img.width}x{img.height}, {method}")
+    return [PrintLine(image=raster_commands(dither(img, method)))]
+
 def image_page_lines(pdf_path: str, page: int, settings: Settings) -> List[PrintLine]:
     if Image is None:
         log("WARNING", "python3-pil is not installed, so image pages can't print")
@@ -1031,13 +1044,25 @@ def image_page_lines(pdf_path: str, page: int, settings: Settings) -> List[Print
     img = page_image(pdf_path, page, settings.dots - settings.dots % 8)
     if img is None:
         return []
-    img = ImageOps.autocontrast(img, cutoff=1)
-    method = choose_dither(img, settings.dither)
-    if method != "threshold":
-        gamma = settings.profile["image_gamma"]
-        img = img.point([round(255 * (i / 255) ** gamma) for i in range(256)])
-    log("DEBUG", f"page {page}: image {img.width}x{img.height}, {method}")
-    return [PrintLine(image=raster_commands(dither(img, method)))]
+    return image_lines(img, settings, f"page {page}")
+
+def image_file_lines(path: str, settings: Settings) -> List[PrintLine]:
+    """A JPEG or PNG sent straight to the queue (phone photos). CUPS's own
+    image filter would crop it to fill the long receipt page, so the PPD
+    routes images here and the whole picture prints at the paper width."""
+    if Image is None:
+        raise RuntimeError("python3-pil is not installed, so images can't print")
+    dots = settings.dots - settings.dots % 8
+    img = Image.open(path)
+    # Decode big JPEGs at a reduced scale; any side of at least `dots` is plenty
+    img.draft("RGB", (dots, dots))
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "P"):
+        # Transparent areas print as white paper
+        img = img.convert("RGBA")
+        background = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        img = Image.alpha_composite(background, img)
+    return image_lines(fit_width(img.convert("L"), dots), settings, "image file")
 
 
 # ---------- PDF extraction ----------
@@ -1086,6 +1111,7 @@ def main() -> None:
     # argv[4] = copies
     # argv[5] = options
     # argv[6] = filename (or data on stdin if absent or "-")
+    # The input is a PDF, or a JPEG/PNG image (see the PPD's cupsFilter lines).
     job_id  = sys.argv[1] if len(sys.argv) > 1 else "-"
     title   = sys.argv[3] if len(sys.argv) > 3 else ""
     infile  = sys.argv[6] if len(sys.argv) > 6 else "-"
@@ -1113,7 +1139,12 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        lines = extract_print_lines(pdf_path, settings)
+        with open(pdf_path, "rb") as f:
+            magic = f.read(8)
+        if magic.startswith((b"\xff\xd8\xff", b"\x89PNG")):
+            lines = image_file_lines(pdf_path, settings)
+        else:
+            lines = extract_print_lines(pdf_path, settings)
     except Exception as e:
         # If extraction fails, emit a minimal notice so the receipt shows *something*
         log("ERROR", f"text extraction failed: {e}")

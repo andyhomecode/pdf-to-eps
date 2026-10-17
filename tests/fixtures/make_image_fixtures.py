@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-# Rebuild the image-only test PDFs:
+# Rebuild the image test fixtures:
 #   python3 tests/fixtures/make_image_fixtures.py
 #
 # photo.pdf: smooth shading, which the filter should dither (Atkinson)
 # qr.pdf:    black and white blocks, which the filter should threshold
+# rotated.jpg: photo.pdf's image stored sideways with EXIF orientation 6,
+#              as phones do; it should print upright (wider than tall)
+# logo.png:  QR blocks on a transparent background
 
 import math
 import os
@@ -45,3 +48,11 @@ if __name__ == "__main__":
     # Pillow writes a one-page PDF with the image at this resolution
     photo().save(os.path.join(HERE, "photo.pdf"), resolution=100)
     qr().save(os.path.join(HERE, "qr.pdf"), resolution=100)
+
+    exif = Image.Exif()
+    exif[0x0112] = 6  # Orientation: rotate 90 degrees clockwise to display
+    photo().transpose(Image.Transpose.ROTATE_90).save(os.path.join(HERE, "rotated.jpg"), quality=85, exif=exif)
+
+    logo = qr().convert("LA")
+    logo.putalpha(qr().point(lambda v: 255 - v))  # white blocks transparent
+    logo.save(os.path.join(HERE, "logo.png"))

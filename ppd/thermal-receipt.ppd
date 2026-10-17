@@ -74,4 +74,6 @@
 *CloseUI: *PrintTitle
 
 *cupsFilter: "application/pdf 0 pdf2escpos.py"
+*cupsFilter: "image/jpeg 0 pdf2escpos.py"
+*cupsFilter: "image/png 0 pdf2escpos.py"
 *cupsManualCopies: True
