@@ -1,0 +1,85 @@
+*PPD-Adobe: "4.3"
+*FormatVersion: "4.3"
+*FileVersion: "1.0"
+*LanguageVersion: English
+*LanguageEncoding: ISOLatin1
+*PCFileName: "thermtxt.ppd"
+*Product: "(Thermal Receipt Printer)"
+*Manufacturer: "Generic"
+*ModelName: "Thermal Receipt Printer Text"
+*ShortNickName: "Thermal Receipt (text)"
+*NickName: "Thermal Receipt Printer (text)"
+*PSVersion: "(3010.000) 0"
+*LanguageLevel: "3"
+*ColorDevice: False
+*DefaultColorSpace: Gray
+*FileSystem: False
+*Throughput: "1"
+*LandscapeOrientation: Plus90
+*TTRasterizer: Type42
+
+*OpenUI *PageSize/Page Size: PickOne
+*DefaultPageSize: Letter
+*PageSize Letter/US Letter: "<</PageSize[612 792]/ImagingBBox null>>setpagedevice"
+*PageSize A4/A4: "<</PageSize[595.28 841.89]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageSize
+
+*OpenUI *PageRegion: PickOne
+*DefaultPageRegion: Letter
+*PageRegion Letter/US Letter: "<</PageSize[612 792]/ImagingBBox null>>setpagedevice"
+*PageRegion A4/A4: "<</PageSize[595.28 841.89]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageRegion
+
+*DefaultImageableArea: Letter
+*ImageableArea Letter/US Letter: "18.00 18.00 594.00 774.00"
+*ImageableArea A4/A4: "18.00 18.00 577.28 823.89"
+
+*DefaultPaperDimension: Letter
+*PaperDimension Letter/US Letter: "612 792"
+*PaperDimension A4/A4: "595.28 841.89"
+
+*OpenUI *EscposCols/Columns: PickOne
+*DefaultEscposCols: 48
+*EscposCols 32/32 columns: ""
+*EscposCols 42/42 columns: ""
+*EscposCols 48/48 columns: ""
+*CloseUI: *EscposCols
+
+*OpenUI *EscposCodepage/Character Set: PickOne
+*DefaultEscposCodepage: cp437
+*EscposCodepage cp437/CP437 (US): ""
+*EscposCodepage cp858/CP858 (Western Europe): ""
+*EscposCodepage latin-1/Latin-1: ""
+*CloseUI: *EscposCodepage
+
+*OpenUI *PrintMode/Print Mode: PickOne
+*DefaultPrintMode: Auto
+*PrintMode Auto/Automatic (receipt-width pages as drawn, others as text): ""
+*PrintMode Text/Text (reflow to the paper width): ""
+*PrintMode Image/As drawn (every page as an image): ""
+*CloseUI: *PrintMode
+
+*OpenUI *Dither/Image Dithering: PickOne
+*DefaultDither: Auto
+*Dither Auto/Automatic: ""
+*Dither Atkinson/Atkinson (photos): ""
+*Dither Floyd-Steinberg/Floyd-Steinberg: ""
+*Dither Threshold/Threshold (QR codes, logos): ""
+*CloseUI: *Dither
+
+*OpenUI *EmbeddedImages/Print Images in Documents: Boolean
+*DefaultEmbeddedImages: True
+*EmbeddedImages True/Yes: ""
+*EmbeddedImages False/No: ""
+*CloseUI: *EmbeddedImages
+
+*OpenUI *PrintTitle/Print Job Title: Boolean
+*DefaultPrintTitle: True
+*PrintTitle True/Yes: ""
+*PrintTitle False/No: ""
+*CloseUI: *PrintTitle
+
+*cupsFilter: "application/pdf 0 pdf2escpos.py"
+*cupsFilter: "image/jpeg 0 pdf2escpos.py"
+*cupsFilter: "image/png 0 pdf2escpos.py"
+*cupsManualCopies: True

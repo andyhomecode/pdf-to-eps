@@ -38,7 +38,7 @@ Settings come from, lowest to highest priority: the printer profile, the PPD's d
 |---|---|---|
 | `EscposCols` (Columns) | 32, 42, 48 | 48 |
 | `EscposCodepage` (Character Set) | cp437, cp858, latin-1 | cp437 |
-| `PageSize` | Receipt80mm, Receipt58mm (58mm caps columns at 35 and images at 416 dots), Letter, A4 | Receipt80mm (Letter on the text queue) |
+| `PageSize` | Main queue: Receipt80mm, Receipt58mm (58mm caps columns at 35 and images at 416 dots). Text queue: Letter, A4 | Receipt80mm; Letter on the text queue |
 | `PrintMode` | Auto (receipt-width pages as drawn, others laid out as text), Text (lay out every page as text, reflowed), Image (every page as drawn) | Auto |
 | `Dither` | Auto, Atkinson, Floyd-Steinberg, Threshold | Auto |
 | `EmbeddedImages` (Print Images in Documents) | True, False | True |
@@ -70,13 +70,13 @@ sudo lpadmin -p thermal-receipt -E -v socket://192.168.1.16:9100 -P ppd/thermal-
 sudo lpadmin -p thermal-receipt -o printer-is-shared=true
 # The text queue: same printer and PPD, Letter paper, so apps lay out a normal page
 # and the filter reflows it
-sudo lpadmin -p thermal-receipt-text -E -v socket://192.168.1.16:9100 -P ppd/thermal-receipt.ppd \
+sudo lpadmin -p thermal-receipt-text -E -v socket://192.168.1.16:9100 -P ppd/thermal-receipt-text.ppd \
     -D "Thermal Receipt (text)" -o printer-is-shared=true -o PageSize=Letter -o PageRegion=Letter
 sudo cupsctl --share-printers
 sudo systemctl enable --now avahi-daemon   # AirPrint discovery
 
 # Install or update the filter and PPD
-sudo ./install.sh                  # filter + ppd/thermal-receipt.ppd on both queues
+sudo ./install.sh                  # filter, and ppd/<queue>.ppd on both queues
 sudo ./install.sh --filter-only    # filter only
 sudo ./install.sh --test tests/fixtures/receipt.pdf   # and print a test page
 sudo ./install.sh --rollback       # back to the previous filter and PPD
@@ -84,7 +84,7 @@ sudo ./install.sh --rollback       # back to the previous filter and PPD
 
 `install.sh` won't install a filter that doesn't compile or a PPD that fails `cupstestppd`. It updates both receipt queues (and skips one that doesn't exist), and CUPS keeps each queue's own defaults. Each install keeps the previous filter as `/usr/lib/cups/filter/pdf2escpos.py.bak` and each queue's previous PPD as `/etc/cups/ppd/<queue>.ppd.bak`.
 
-**Two queues, one printer.** `thermal-receipt` defaults to the 80mm paper: apps lay pages out for the receipt and they print as drawn. `thermal-receipt-text` ("Thermal Receipt (text)") defaults to Letter: apps lay out a normal page, and since it isn't 80mm wide the filter reflows it as printer text, using much less paper. Choosing Letter or A4 as the paper size on the main queue does the same. It needs a real terminal for `sudo`.
+**Two queues, one printer.** `thermal-receipt` defaults to the 80mm paper: apps lay pages out for the receipt and they print as drawn. `thermal-receipt-text` ("Thermal Receipt (text)") has Letter and A4 paper: apps lay out a normal page, and since it isn't 80mm wide the filter reflows it as printer text, using much less paper. Each queue has its own PPD with only its own paper sizes (`ppd/thermal-receipt.ppd`, `ppd/thermal-receipt-text.ppd`; a test keeps the rest of them identical). One PPD with all four sizes doesn't work: CUPS then reports Letter as the loaded paper, and an iPhone offers only loaded paper, so the main queue would print as text too. It needs a real terminal for `sudo`.
 
 The PPD sends `application/pdf`, `image/jpeg` and `image/png` straight to the filter. Images have to skip CUPS's own image filter, which would crop a photo to fill the long receipt page.
 

@@ -22,29 +22,21 @@
 *DefaultPageSize: Receipt80mm
 *PageSize Receipt80mm/80mm Receipt: "<</PageSize[226.77 841.89]/ImagingBBox null>>setpagedevice"
 *PageSize Receipt58mm/58mm Receipt: "<</PageSize[164.41 841.89]/ImagingBBox null>>setpagedevice"
-*PageSize Letter/US Letter (reflowed to the receipt as text): "<</PageSize[612 792]/ImagingBBox null>>setpagedevice"
-*PageSize A4/A4 (reflowed to the receipt as text): "<</PageSize[595.28 841.89]/ImagingBBox null>>setpagedevice"
 *CloseUI: *PageSize
 
 *OpenUI *PageRegion: PickOne
 *DefaultPageRegion: Receipt80mm
 *PageRegion Receipt80mm/80mm Receipt: "<</PageSize[226.77 841.89]/ImagingBBox null>>setpagedevice"
 *PageRegion Receipt58mm/58mm Receipt: "<</PageSize[164.41 841.89]/ImagingBBox null>>setpagedevice"
-*PageRegion Letter/US Letter (reflowed to the receipt as text): "<</PageSize[612 792]/ImagingBBox null>>setpagedevice"
-*PageRegion A4/A4 (reflowed to the receipt as text): "<</PageSize[595.28 841.89]/ImagingBBox null>>setpagedevice"
 *CloseUI: *PageRegion
 
 *DefaultImageableArea: Receipt80mm
 *ImageableArea Receipt80mm/80mm Receipt: "0.00 0.00 226.77 841.89"
 *ImageableArea Receipt58mm/58mm Receipt: "0.00 0.00 164.41 841.89"
-*ImageableArea Letter/US Letter (reflowed to the receipt as text): "18.00 18.00 594.00 774.00"
-*ImageableArea A4/A4 (reflowed to the receipt as text): "18.00 18.00 577.28 823.89"
 
 *DefaultPaperDimension: Receipt80mm
 *PaperDimension Receipt80mm/80mm Receipt: "226.77 841.89"
 *PaperDimension Receipt58mm/58mm Receipt: "164.41 841.89"
-*PaperDimension Letter/US Letter (reflowed to the receipt as text): "612 792"
-*PaperDimension A4/A4 (reflowed to the receipt as text): "595.28 841.89"
 
 *OpenUI *EscposCols/Columns: PickOne
 *DefaultEscposCols: 48

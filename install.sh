@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # install.sh — install pdf2escpos.py, and the PPD on each receipt queue.
 #
-#   sudo ./install.sh                      # filter + ppd/thermal-receipt.ppd on both receipt queues
+#   sudo ./install.sh                      # filter, and ppd/<queue>.ppd on both receipt queues
 #   sudo ./install.sh --queue receipt-citizen --ppd ppd/citizen-cd-s500a.ppd
 #   sudo ./install.sh --filter-only        # leave the PPDs alone
 #   sudo ./install.sh --test some.pdf      # also send a test print (to the first queue)
 #   sudo ./install.sh --rollback           # put back the previous filter and PPDs
 #
-# The two receipt queues share one printer and one PPD: thermal-receipt
-# defaults to 80mm paper (pages print as drawn) and thermal-receipt-text to
-# Letter (pages are reflowed as text). A queue that doesn't exist yet is
-# skipped. CUPS keeps each queue's own defaults when its PPD is replaced.
+# The two receipt queues share one printer, each with its own PPD:
+# thermal-receipt has only receipt paper (pages print as drawn) and
+# thermal-receipt-text only Letter and A4 (pages are reflowed as text). They
+# can't share one PPD: iPhones offer only the paper a queue says is loaded,
+# and with Letter listed CUPS reports Letter as loaded. A queue that doesn't
+# exist yet is skipped. CUPS keeps each queue's own defaults when its PPD
+# is replaced.
 #
 # Each install keeps the previous filter as pdf2escpos.py.bak and each queue's
 # previous PPD as /etc/cups/ppd/<queue>.ppd.bak, so --rollback undoes one install.
@@ -22,14 +25,14 @@ FILTER=pdf2escpos.py
 PPD_DIR=/etc/cups/ppd
 DEFAULT_QUEUES=(thermal-receipt thermal-receipt-text)
 QUEUES=()
-PPD=ppd/thermal-receipt.ppd
+PPD=""  # default: ppd/<queue>.ppd
 FILTER_ONLY=0
 ROLLBACK=0
 TEST_FILE=""
 
 cd "$(dirname "$0")"
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -84,13 +87,17 @@ fi
 
 # Don't install a filter that doesn't even compile, or a PPD CUPS rejects
 python3 -m py_compile "$FILTER"
+ppd_for() { echo "${PPD:-ppd/$1.ppd}"; }
 if [ "$FILTER_ONLY" -eq 0 ]; then
-    [ -f "$PPD" ] || { echo "No $PPD; use --ppd FILE or --filter-only." >&2; exit 1; }
-    cupstestppd -W translations "$PPD" >/dev/null || {
-        echo "cupstestppd failed for $PPD:" >&2
-        cupstestppd -W translations "$PPD" >&2 || true
-        exit 1
-    }
+    for q in "${QUEUES[@]}"; do
+        f=$(ppd_for "$q")
+        [ -f "$f" ] || { echo "No $f; use --ppd FILE or --filter-only." >&2; exit 1; }
+        cupstestppd -W translations "$f" >/dev/null || {
+            echo "cupstestppd failed for $f:" >&2
+            cupstestppd -W translations "$f" >&2 || true
+            exit 1
+        }
+    done
 fi
 
 if [ -f "$FILTER_DIR/$FILTER" ]; then
@@ -103,8 +110,8 @@ for q in "${QUEUES[@]}"; do
     if [ "$FILTER_ONLY" -eq 0 ]; then
         cp -p "$PPD_DIR/$q.ppd" "$PPD_DIR/$q.ppd.bak"
         # CUPS carries the queue's current default choices over to the new PPD
-        lpadmin -p "$q" -P "$PPD"
-        echo "Installed $PPD for queue $q (previous kept as $PPD_DIR/$q.ppd.bak)"
+        lpadmin -p "$q" -P "$(ppd_for "$q")"
+        echo "Installed $(ppd_for "$q") for queue $q (previous kept as $PPD_DIR/$q.ppd.bak)"
     fi
     lpstat -p "$q"
     lpoptions -p "$q" -l | grep -E '^(PageSize|PrintMode)'

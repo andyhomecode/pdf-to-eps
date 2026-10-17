@@ -19,6 +19,7 @@ import escpos_preview  # noqa: E402
 
 FILTER = os.path.join(REPO, "pdf2escpos.py")
 PPD = os.path.join(REPO, "ppd", "thermal-receipt.ppd")
+TEXT_PPD = os.path.join(REPO, "ppd", "thermal-receipt-text.ppd")
 FIXTURES = os.path.join(REPO, "tests", "fixtures")
 RECEIPT_PDF = os.path.join(FIXTURES, "receipt.pdf")
 INVOICE_PDF = os.path.join(FIXTURES, "sample-invoice.pdf")
@@ -67,6 +68,21 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(s.cols, 35)
         s = f.resolve_settings(argv(options="PageSize=Receipt58mm EscposCols=32"), {})
         self.assertEqual(s.cols, 32)
+
+    def test_ppds_match_apart_from_paper(self):
+        # The two queues' PPDs must offer the same options and filter; only the
+        # paper sizes (receipt vs Letter/A4) and the printer's name differ
+        paper = ("*PageSize", "*PageRegion", "*ImageableArea", "*PaperDimension",
+                 "*DefaultPageSize", "*DefaultPageRegion", "*DefaultImageableArea", "*DefaultPaperDimension",
+                 "*PCFileName", "*ModelName", "*ShortNickName", "*NickName")
+
+        def rest(path):
+            with open(path, encoding="latin-1") as fh:
+                return [l for l in fh.read().splitlines() if not l.startswith(paper)]
+        self.assertEqual(rest(PPD), rest(TEXT_PPD))
+        self.assertEqual(f.read_ppd_defaults(TEXT_PPD)["PageSize"], "Letter")
+        with open(PPD, encoding="latin-1") as fh:
+            self.assertNotIn("Letter", fh.read())  # phones would offer only Letter
 
     def test_letter_and_a4_paper(self):
         # The text queue's Letter/A4 paper: full 48 columns and 576 dots, and the
