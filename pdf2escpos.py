@@ -8,54 +8,48 @@
 
 import os
 import sys
+import shlex
 import subprocess
-import shutil
 import textwrap
-from typing import Optional, List
+import unicodedata
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Dict, List, Optional
 
-# ---------- Tunables ----------
-# Common column widths (pick one or read from PPD options):
-# 80mm roll, Font A (12x24): ~48 cols
-# 58/60mm roll, Font A: ~32–42 cols (depends on model)
-try:
-    COLS = int(os.environ.get("ESCPOS_COLS", "48"))
-    if COLS <= 0 or COLS > 1000:  # Reasonable bounds
-        COLS = 48
-except ValueError:
-    COLS = 48
+# ---------- Printer profiles ----------
+# Each profile describes one printer model. Settings from the PPD, the job
+# options and ESCPOS_* env vars are applied on top of the profile defaults.
+#
+# codepages: PPD option value -> (Python codec, ESC t n value for this printer)
+PROFILES = {
+    "epson-tm-t20ii": {
+        "cols": 48,          # 80mm roll, Font A (12x24)
+        "cols_58mm": 35,     # 58mm roll, Font A, per Epson spec
+        "codepages": {
+            "cp437": ("cp437", 0),     # PC437 USA
+            "cp858": ("cp858", 19),    # PC858 Euro
+            "latin-1": ("cp1252", 16), # WPC1252, the printer's closest Latin-1 table
+        },
+        "default_codepage": "cp437",
+        "cut": b'\x1b\x6d',  # ESC m partial cut; known to work on the TM-T20II
+    },
+}
+DEFAULT_PROFILE = "epson-tm-t20ii"
 
-CODEPAGE = os.environ.get("ESCPOS_CODEPAGE", "cp437")  # cp437/cp858/latin-1/jis, etc.
+# ESCPOS_* env vars, kept for command-line testing. They override everything.
+ENV_OPTIONS = {
+    "ESCPOS_PROFILE": "EscposProfile",
+    "ESCPOS_COLS": "EscposCols",
+    "ESCPOS_CODEPAGE": "EscposCodepage",
+}
+
+MAX_COPIES = 100
 DENSE_LINE_SPACING = False  # set True for tighter lines on long receipts
 CUT_AT_JOB_END = True
-CUT_MODE_FULL = True  # False = partial cut
-
-try:
-    LEFT_MARGIN_SPACES = int(os.environ.get("ESCPOS_LEFT", "0"))
-    if LEFT_MARGIN_SPACES < 0 or LEFT_MARGIN_SPACES > 50:  # Reasonable bounds
-        LEFT_MARGIN_SPACES = 0
-except ValueError:
-    LEFT_MARGIN_SPACES = 0
-
-try:
-    RIGHT_MARGIN_SPACES = int(os.environ.get("ESCPOS_RIGHT", "0"))
-    if RIGHT_MARGIN_SPACES < 0 or RIGHT_MARGIN_SPACES > 50:  # Reasonable bounds
-        RIGHT_MARGIN_SPACES = 0
-except ValueError:
-    RIGHT_MARGIN_SPACES = 0
-
-try:
-    CUT_FEED_LINES = int(os.environ.get("ESCPOS_CUT_FEED_LINES", "6"))
-    if CUT_FEED_LINES < 0 or CUT_FEED_LINES > 20:  # Reasonable bounds
-        CUT_FEED_LINES = 6
-except ValueError:
-    CUT_FEED_LINES = 6
-
-HEADER = os.environ.get("ESCPOS_HEADER", "")[:200]  # Limit header length
-FOOTER = os.environ.get("ESCPOS_FOOTER", "")[:200]  # Limit footer length
 # Simple directive markers you can print from your app:
 # [CENTER], [LEFT], [RIGHT]
 # [B], [/B] for bold, [U], [/U] underline
-# [QR:some text] (very basic bitmap QR using ESC/POS built-ins is possible, but omitted here for brevity)
+# [CUT] on a line by itself
 # --------------------------------
 
 # ESC/POS Control Characters
@@ -67,16 +61,181 @@ FS  = b'\x1c'
 FONT_A = b'\x00'
 FONT_B = b'\x01'
 DENSE_LINE_SPACING_DOTS = b'\x16'  # 22-dot line spacing
-CODEPAGE_WPC1252 = b'\x10'  # Example code page selection
-PAPER_CUT_COMMAND = b'\x1b\x6d'  # Your preferred cut command
 
-def esc(*vals) -> bytes: 
-    return bytes(vals)
 
-def encode_text(s: str) -> bytes:     
-    return s.encode(CODEPAGE, errors='replace')
+def log(level: str, msg: str) -> None:
+    """Write a CUPS-style log line (DEBUG/INFO/WARNING/ERROR) to stderr."""
+    sys.stderr.write(f"{level}: pdf2escpos: {msg}\n")
 
-def init_seq() -> bytes:
+
+# ---------- Settings ----------
+
+@dataclass
+class Settings:
+    profile_name: str
+    profile: dict
+    cols: int
+    codepage: str       # PPD option value, e.g. "cp437"
+    codec: str          # Python codec used to encode text
+    codepage_n: int     # ESC t n value
+    left: int
+    right: int
+    cut_feed_lines: int
+    header: str
+    footer: str
+    copies: int
+
+
+def bounded_int(value: Optional[str], default: int, lo: int, hi: int) -> int:
+    try:
+        n = int(value) if value is not None else default
+    except ValueError:
+        return default
+    return n if lo <= n <= hi else default
+
+
+def parse_options(options: str) -> Dict[str, str]:
+    """Parse the CUPS options string (argv[5]): 'name=value name2="a b" flag'."""
+    try:
+        words = shlex.split(options)
+    except ValueError:
+        words = options.split()
+    parsed = {}
+    for word in words:
+        name, sep, value = word.partition("=")
+        parsed[name] = value if sep else "true"
+    return parsed
+
+
+def read_ppd_defaults(ppd_path: Optional[str]) -> Dict[str, str]:
+    """Read '*DefaultName: value' lines from the queue's PPD (CUPS sets $PPD)."""
+    defaults = {}
+    if not ppd_path:
+        return defaults
+    try:
+        with open(ppd_path, encoding="latin-1") as f:
+            for line in f:
+                if line.startswith("*Default"):
+                    name, _, value = line[len("*Default"):].partition(":")
+                    defaults[name.strip()] = value.strip().strip('"')
+    except OSError as e:
+        log("WARNING", f"cannot read PPD {ppd_path}: {e}")
+    return defaults
+
+
+def resolve_settings(argv: List[str], env: Dict[str, str]) -> Settings:
+    # Lowest to highest priority: profile defaults, PPD defaults, job options, env vars
+    raw = read_ppd_defaults(env.get("PPD"))
+    raw.update(parse_options(argv[5] if len(argv) > 5 else ""))
+    for var, name in ENV_OPTIONS.items():
+        if env.get(var):
+            raw[name] = env[var]
+
+    profile_name = raw.get("EscposProfile", DEFAULT_PROFILE)
+    if profile_name not in PROFILES:
+        log("WARNING", f"unknown profile {profile_name!r}, using {DEFAULT_PROFILE}")
+        profile_name = DEFAULT_PROFILE
+    profile = PROFILES[profile_name]
+
+    cols = bounded_int(raw.get("EscposCols"), profile["cols"], 1, 1000)
+    # A 58mm roll can't fit more than the profile's 58mm column count
+    page_size = raw.get("PageSize") or raw.get("PageRegion") or raw.get("media") or ""
+    if "58" in page_size:
+        cols = min(cols, profile["cols_58mm"])
+
+    codepage = raw.get("EscposCodepage", profile["default_codepage"]).lower()
+    if codepage not in profile["codepages"]:
+        log("WARNING", f"code page {codepage!r} not available on {profile_name}, "
+                       f"using {profile['default_codepage']}")
+        codepage = profile["default_codepage"]
+    codec, codepage_n = profile["codepages"][codepage]
+
+    return Settings(
+        profile_name=profile_name,
+        profile=profile,
+        cols=cols,
+        codepage=codepage,
+        codec=codec,
+        codepage_n=codepage_n,
+        left=bounded_int(env.get("ESCPOS_LEFT"), 0, 0, 50),
+        right=bounded_int(env.get("ESCPOS_RIGHT"), 0, 0, 50),
+        cut_feed_lines=bounded_int(env.get("ESCPOS_CUT_FEED_LINES"), 6, 0, 20),
+        header=env.get("ESCPOS_HEADER", "")[:200],
+        footer=env.get("ESCPOS_FOOTER", "")[:200],
+        copies=bounded_int(argv[4] if len(argv) > 4 else None, 1, 1, MAX_COPIES),
+    )
+
+
+# ---------- Safe characters ----------
+
+# Always replaced, whatever the code page: invisible characters, Word's \x01
+# bullets, and the U+FFFD that decoding errors leave behind.
+ALWAYS_MAP = {
+    "\x01": "*",
+    "\u00ad": "",  # soft hyphen
+    "\u200b": "", "\u200c": "", "\u200d": "", "\u2060": "", "\ufeff": "",
+    "\ufffd": "?",
+}
+
+# Used only when the code page lacks the character
+CHAR_MAP = {
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'", "\u2032": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"', "\u2033": '"',
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-",
+    "\u2015": "-", "\u2212": "-",
+    "\u2022": "*", "\u2023": "*", "\u2043": "*", "\u25cf": "*", "\u25aa": "*",
+    "\u25e6": "*", "\uf0b7": "*", "\uf0a7": "*",  # last two: Symbol/Wingdings bullets
+    "\u2026": "...",
+    "\u00a0": " ", "\u202f": " ", "\u3000": " ",
+    "\u3001": ",", "\uff0c": ",", "\u3002": ".",
+    "\u00a9": "(c)", "\u00ae": "(R)", "\u2122": "TM",
+    "\u20ac": "EUR",
+    # Letters with a stroke have no NFKD decomposition
+    "\u0141": "L", "\u0142": "l", "\u00d8": "O", "\u00f8": "o",
+    "\u0110": "D", "\u0111": "d", "\u0126": "H", "\u0127": "h",
+}
+
+
+@lru_cache(maxsize=4096)
+def encodable(ch: str, codec: str) -> bool:
+    try:
+        ch.encode(codec)
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def sanitize(s: str, codec: str) -> str:
+    """Make text safe to send: no control bytes, only characters the code page has."""
+    out = []
+    for ch in s.expandtabs(8):
+        if ch == "\n":
+            out.append(ch)
+        elif ch in ALWAYS_MAP:
+            out.append(ALWAYS_MAP[ch])
+        elif ord(ch) < 0x20 or 0x7f <= ord(ch) <= 0x9f:
+            continue  # C0/C1 control: a stray ESC or GS would be read as a command
+        elif encodable(ch, codec):
+            out.append(ch)
+        elif ch in CHAR_MAP:
+            out.append(CHAR_MAP[ch])
+        else:
+            # Strip accents (Ł -> L), unfold compatibility forms (ﬁ -> fi)
+            base = "".join(c for c in unicodedata.normalize("NFKD", ch)
+                           if not unicodedata.combining(c))
+            if base and all(encodable(c, codec) and ord(c) >= 0x20 for c in base):
+                out.append(base)
+            else:
+                out.append("?")
+    return "".join(out)
+
+
+# ---------- ESC/POS output ----------
+
+def encode_text(s: str, settings: Settings) -> bytes:
+    return sanitize(s, settings.codec).encode(settings.codec, errors='replace')
+
+def init_seq(settings: Settings) -> bytes:
     out = bytearray()
     out += ESC + b'@'              # Initialize
     out += ESC + b'M' + FONT_A     # Font A (0); Font B is \x01
@@ -84,39 +243,35 @@ def init_seq() -> bytes:
         out += ESC + b'3' + DENSE_LINE_SPACING_DOTS  # 22-dot line spacing (denser)
     else:
         out += ESC + b'2'            # Default line spacing
-    # Set code page if needed (varies by model; CP selection example for WPC1252 = 16/17 on many Epson)
-    # out += ESC + b't' + CODEPAGE_WPC1252    # Example: select code page 16 (depends on printer)
-    return out
+    out += ESC + b't' + bytes([settings.codepage_n])  # Code page
+    return bytes(out)
 
-def align_left() -> bytes:   
+def align_left() -> bytes:
     return ESC + b'a' + b'\x00'
 
-def align_center() -> bytes: 
+def align_center() -> bytes:
     return ESC + b'a' + b'\x01'
 
-def align_right() -> bytes:  
+def align_right() -> bytes:
     return ESC + b'a' + b'\x02'
 
-def bold_on() -> bytes:      
+def bold_on() -> bytes:
     return ESC + b'E' + b'\x01'
 
-def bold_off() -> bytes:     
+def bold_off() -> bytes:
     return ESC + b'E' + b'\x00'
 
-def underline_on() -> bytes: 
+def underline_on() -> bytes:
     return ESC + b'-' + b'\x01'
 
 def underline_off() -> bytes:
     return ESC + b'-' + b'\x00'
 
-def cut(full: bool = True) -> bytes: 
-    return (GS + b'V' + (b'\x00' if full else b'\x01'))  # full or partial
+def paper_cut(settings: Settings) -> bytes:
+    """Paper cut using the profile's cut command"""
+    return settings.profile["cut"]
 
-def paper_cut() -> bytes:
-    """Paper cut using the preferred command"""
-    return PAPER_CUT_COMMAND
-
-def lf(n: int = 1) -> bytes:        
+def lf(n: int = 1) -> bytes:
     return b'\n' * n
 
 def wrap_line(line: str, width: int) -> List[str]:
@@ -125,7 +280,7 @@ def wrap_line(line: str, width: int) -> List[str]:
     clean = clean.replace('[B]','').replace('[/B]','').replace('[U]','').replace('[/U]','')
     return textwrap.wrap(clean, width=width, replace_whitespace=False, drop_whitespace=False) or [""]
 
-def emit_line(line: str) -> bytes:
+def emit_line(line: str, settings: Settings) -> bytes:
     out = bytearray()
     # Alignment
     if line.startswith('[CENTER]'):
@@ -149,14 +304,57 @@ def emit_line(line: str) -> bytes:
         line = line[3:-4]
 
     # Margins via spaces
-    left_pad  = ' ' * LEFT_MARGIN_SPACES
-    right_pad = ' ' * RIGHT_MARGIN_SPACES
+    left_pad  = ' ' * settings.left
+    right_pad = ' ' * settings.right
 
-    # Wrap to COLS minus margins
-    inner_width = max(1, COLS - LEFT_MARGIN_SPACES - RIGHT_MARGIN_SPACES)
+    # Wrap to cols minus margins
+    inner_width = max(1, settings.cols - settings.left - settings.right)
     for seg in wrap_line(line, inner_width):
-        out += style_on + encode_text(left_pad + seg + right_pad) + style_off + lf()
+        out += style_on + encode_text(left_pad + seg + right_pad, settings) + style_off + lf()
+    return bytes(out)
+
+def notice(message: str, settings: Settings) -> bytes:
+    """A short printed message, so a failed job still shows *something*."""
+    out = init_seq(settings) + align_left() + encode_text(message, settings) + lf(2)
+    if CUT_AT_JOB_END:
+        out += lf(settings.cut_feed_lines) + paper_cut(settings)
     return out
+
+def render_document(lines: List[str], title: str, settings: Settings) -> bytes:
+    """Render one copy of the document, ending with the cut."""
+    out = bytearray()
+    out += init_seq(settings)
+
+    if settings.header:
+        out += align_center() + bold_on() + encode_text(settings.header, settings) + bold_off() + lf()
+
+    # Optional title line (trim to width)
+    if title:
+        out += align_center() + underline_on() + encode_text(title, settings)[:settings.cols] + underline_off() + lf()
+
+    for raw in lines:
+        # Simple directive passthrough: blank lines, alignment & styles supported
+        s = raw.rstrip()
+        if not s:
+            out += lf()
+            continue
+
+        # Explicit cut marker in text
+        if s.strip() == "[CUT]":
+            out += lf(2) + paper_cut(settings)
+            continue
+
+        out += emit_line(s, settings)
+
+    if settings.footer:
+        out += lf() + align_center() + encode_text(settings.footer, settings) + lf()
+
+    if CUT_AT_JOB_END:
+        out += lf(settings.cut_feed_lines) + paper_cut(settings)
+    return bytes(out)
+
+
+# ---------- PDF extraction ----------
 
 def validate_pdf_path(pdf_path: str) -> bool:
     """Validate that the PDF path is safe and the file exists."""
@@ -173,7 +371,7 @@ def pdftotext_to_stdout(pdf_path: str) -> bytes:
     # Validate input path for security
     if not validate_pdf_path(pdf_path):
         raise ValueError(f"Invalid or inaccessible PDF path: {pdf_path}")
-    
+
     # -layout keeps columns reasonably intact; -nopgbrk avoids page-break characters
     cmd = ["pdftotext", "-layout", "-nopgbrk", "-enc", "UTF-8", pdf_path, "-"]
     try:
@@ -196,6 +394,10 @@ def main() -> None:
     title   = sys.argv[3] if len(sys.argv) > 3 else ""
     infile  = sys.argv[6] if len(sys.argv) > 6 else "-"
 
+    settings = resolve_settings(sys.argv, dict(os.environ))
+    log("DEBUG", f"job {job_id}: profile={settings.profile_name} cols={settings.cols} "
+                 f"codepage={settings.codepage} (ESC t {settings.codepage_n}) copies={settings.copies}")
+
     # Get PDF bytes to a temp file if needed
     temp_file_created = False
     if infile == "-":
@@ -210,70 +412,31 @@ def main() -> None:
         pdf_path = infile
     else:
         # File doesn't exist - this is an error
-        sys.stderr.write(f"Error: PDF file '{infile}' not found\n")
-        sys.stdout.buffer.write(init_seq())
-        sys.stdout.buffer.write(align_left() + encode_text(f"Error: PDF file '{infile}' not found\n") + lf())
-        if CUT_AT_JOB_END:
-            sys.stdout.buffer.write(lf(CUT_FEED_LINES) + paper_cut())
+        log("ERROR", f"PDF file '{infile}' not found")
+        sys.stdout.buffer.write(notice(f"Error: PDF file '{infile}' not found", settings))
         sys.exit(1)
 
     try:
         text_bytes = pdftotext_to_stdout(pdf_path)
     except Exception as e:
         # If extraction fails, emit a minimal notice so the receipt shows *something*
-        sys.stdout.buffer.write(init_seq())
-        sys.stdout.buffer.write(align_left() + encode_text("Unable to extract text from PDF.\n") + lf())
-        if CUT_AT_JOB_END:
-            sys.stdout.buffer.write(lf(CUT_FEED_LINES) + paper_cut())
-        # Clean up temp file before exiting
+        log("ERROR", f"text extraction failed: {e}")
+        sys.stdout.buffer.write(notice("Unable to extract text from PDF.", settings))
+        sys.exit(0)
+    finally:
+        # Clean up temp file
         if temp_file_created and os.path.exists(pdf_path):
             try:
                 os.unlink(pdf_path)
             except OSError:
                 pass  # Ignore cleanup errors
-        sys.exit(0)
-    
-    # Clean up temp file after successful processing
-    if temp_file_created and os.path.exists(pdf_path):
-        try:
-            os.unlink(pdf_path)
-        except OSError:
-            pass  # Ignore cleanup errors
 
     lines = text_bytes.decode("utf-8", errors="replace").splitlines()
 
-    out = bytearray()
-    out += init_seq()
-
-    if HEADER:
-        out += align_center() + bold_on() + encode_text(HEADER) + bold_off() + lf()
-
-    # Optional title line (trim to width)
-    if title:
-        out += align_center() + underline_on() + encode_text(title[:COLS]) + underline_off() + lf()
-
-    for raw in lines:
-        # Simple directive passthrough: blank lines, alignment & styles supported
-        # You can also add recognizers for e.g. [CUT], [QR:...], [BAR128:...]
-        s = raw.rstrip()
-        if not s:
-            out += lf()
-            continue
-
-        # Example: explicit cut marker in text
-        if s.strip() == "[CUT]":
-            out += lf(2) + cut(CUT_MODE_FULL)
-            continue
-
-        out += emit_line(s)
-
-    if FOOTER:
-        out += lf() + align_center() + encode_text(FOOTER) + lf()
-
-    if CUT_AT_JOB_END:
-        out += lf(CUT_FEED_LINES) + paper_cut()
-
-    sys.stdout.buffer.write(out)
+    # The PPD sets cupsManualCopies, so copies are ours to print
+    document = render_document(lines, title, settings)
+    for _ in range(settings.copies):
+        sys.stdout.buffer.write(document)
 
 if __name__ == "__main__":
     main()
