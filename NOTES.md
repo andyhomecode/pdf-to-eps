@@ -1,0 +1,53 @@
+# Notes: printers, setup and plans
+
+## Printers
+
+| Printer | Type | Connection | Queue | Status |
+|---|---|---|---|---|
+| Epson TM-T20II | Thermal receipt, 80mm, 203 dpi, autocutter | Ethernet, `socket://192.168.1.16:9100` (the "receipt" box on the LAN) | `thermal-receipt` | In use, shared over AirPrint |
+| Citizen CD-S500A | 9-pin impact receipt, ESC/POS, USB-B, probably 76mm paper, maybe a red/black ribbon | Not connected yet | `receipt-citizen` (planned) | Phase 2 |
+| OKI ML420 | 9-pin dot matrix, Epson FX / IBM emulation (ESC/P, not ESC/POS), USB-B | Not connected yet | its own queue (planned) | Phase 3 |
+
+All queues run on the ThinkCentre (`/usr/lib/cups/filter/pdf2escpos.py`, PPDs in `ppd/`) and are shared over AirPrint, so iPhones and Macs print to them directly. How the server side is set up, and how to rebuild it, is in the ThinkCentre reference doc (`thinkcentre-reference.md` in Dropbox, section "Receipt Printer").
+
+## How a job reaches the printer
+
+- **PDF** (documents, web pages, email from the phone, anything from a Mac): CUPS passes the PDF to `pdf2escpos.py`, which prints the text as text and pages without text as images.
+- **JPEG/PNG** (photos from the phone): the iPhone sends `image/jpeg` on the borderless 80x297mm page. CUPS's own image filter would rotate and crop the photo to fill that strip (seen 2026-10-17), so the PPD's `*cupsFilter` lines route images straight to `pdf2escpos.py`, which prints the whole photo at the paper width.
+- **Raw** (`lp -o raw`): goes straight to the printer.
+
+## Changing the defaults phones use
+
+AirPrint doesn't show the custom menus (Columns, Character Set, Print Mode, Dithering, Print Job Title). Phone and Mac jobs use the queue's defaults. Change those on http://localhost:631/printers/thermal-receipt (Administration → Set Default Options), or with `sudo lpadmin -p thermal-receipt -o Dither-default=Atkinson`.
+
+## Tuning
+
+- **Image darkness:** `image_gamma` in the profile (0.8 on the Epson). Lower values lighten midtones. Impact printers spread more, so they'll need a lower value.
+- **Auto dither:** images with at least 90% of pixels near black or white are thresholded. Others get Atkinson. QR fixture: 94%, photo: 51%, text pages: 97-99%.
+- **Layout thresholds** (top of the Layout section in `pdf2escpos.py`): heading size ratios, the 0.75× cutoff for dropping small diagram text, and the 8% page margin zone checked for headers and footers.
+
+## Phase 2: Citizen CD-S500A
+
+Connection: **USB-B straight into the ThinkCentre** if it can sit in the shoe room (URI from `lpinfo -v`, `usb://Citizen/...`). Otherwise use a **Raspberry Pi running `p910nd`** (raw port 9100, one port per printer, so the same Pi can drive the OKI too) with `socket://<pi>:9100`. The filter works the same either way.
+
+Checklist:
+1. Add a `citizen-cd-s500a` profile: impact, about 40 columns (to verify), `GS V` cut, `ESC r 1` for red, images as `ESC *` 8-dot bands with `ESC 3` line spacing, and a lower `image_gamma`. Images currently only support `GS v 0`, so the `ESC *` path has to be written.
+2. Create `ppd/citizen-cd-s500a.ppd` with `EscposProfile=citizen-cd-s500a`, then a `receipt-citizen` queue, shared over AirPrint.
+3. Add a calibration print (`PrintMode=Calibrate`): a column ruler for each font, a code page sample, bold, double-height and red samples, a dot-width ruler, the same photo with all three dither methods, then a cut.
+4. Fix the profile from what prints: column counts, dots, image density and band alignment, the cut command (some units have no autocutter, so fall back to a feed), and red.
+5. Print from the iPhone and the Mac, then update this file and the reference doc.
+
+## Phase 3: OKI ML420
+
+**Why:** today the OKI can only print from Windows, through OKI's driver, which rasterizes PDFs: slow, and low quality compared with native text. Nothing prints to it from a Mac or iPhone. With this filter it would print text as fast native text over AirPrint, and rasterize only image pages.
+
+Plan:
+- An `escp` command set in the renderer: 80 or 136 columns depending on pitch, a form feed per page instead of a cut, `ESC E` bold, `ESC W` double width, `ESC *` 8-pin graphics for image pages, and the ESC/P code page command.
+- Its own PPD and queue, connected by USB-B to the ThinkCentre or the same Pi as the Citizen.
+
+## Ideas not done yet
+
+- Landscape photos print full width but short (a 4:3 photo is about 7 x 5 cm). They could be turned sideways to print larger along the paper.
+- Logos inside text pages (mixed pages) print as text only. The images on those pages could be printed inline.
+- The CUPS Scaling option (Auto, Fit, Fill, None) is ignored.
+- A paragraph that continues onto the next page isn't joined across the page break.

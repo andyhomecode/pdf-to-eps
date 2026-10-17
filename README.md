@@ -1,318 +1,105 @@
-# PDF to ESC/POS CUPS Filter
+# pdf2escpos
 
-A CUPS filter that converts PDF documents to ESC/POS format for thermal receipt printers.
+A CUPS filter that prints PDFs, photos and images on an ESC/POS receipt printer, so an Epson TM-T20II shared over AirPrint works from an iPhone or Mac like any other printer.
 
-## Overview
+Instead of rasterizing every page, it reads the PDF's text, layout and fonts and prints them as native printer text: sharp, fast and laid out for a 48-column roll. Pages without text and photos print as dithered images.
 
-`pdf2escpos.py` is a CUPS filter that:
-- Extracts text from PDF files using `pdftotext`
-- Formats text for thermal receipt printers (48-column default)
-- Generates ESC/POS commands for proper printing
-- Supports text alignment, bold, underline formatting
-- Handles margins, headers, footers, and paper cutting
+It runs on the ThinkCentre server as the filter for the `thermal-receipt` queue. `NOTES.md` covers the printers, how they're connected and what's planned next.
 
-## Features
+## What it does
 
-- **Text Extraction**: Uses `pdftotext` for reliable PDF text extraction
-- **Text Wrapping**: Automatic line wrapping for receipt widths
-- **Formatting Support**: Bold, underline, left/center/right alignment
-- **Configurable**: Environment variables for customization
-- **Error Handling**: Graceful fallback for problematic PDFs
-- **Memory Safe**: Proper cleanup of temporary files
-- **Security**: Input validation and bounds checking
+**Text** (from `pdftohtml -xml`, falling back to `pdftotext -layout`):
+- Paragraphs are rejoined and rewrapped to the paper width, and words hyphenated at line ends are mended.
+- Bullet and numbered items wrap with a hanging indent. Word's Symbol-font bullets print as `*`.
+- Label/value rows, table rows and dot-leader prices (`Latte ...... $4.50`) print with the value right-aligned. Lines of `-`, `_`, `=` or `*` print as one full-width rule.
+- Short-line columns, such as an address, keep their line breaks.
+- Headings print double height (1.4× the body size) or double size (2×). Bold text prints bold. Red text prints red on printers that have it, otherwise bold. Centered and right-aligned lines keep their alignment.
+- Page numbers, running headers and footers, and small diagram labels are left out. Fake bold (text drawn twice) is undone.
+- Control bytes are stripped, and characters the printer's code page lacks are mapped (smart quotes, dashes, `…`, ligatures) or have their accents removed. `?` is the last resort.
 
-## Requirements
+**Images:** JPEG and PNG files, pages with no text, or every page with `PrintMode=Image`:
+- Turned upright from the photo's EXIF orientation, cropped to what's drawn (PDF pages) and scaled to the full paper width.
+- Dithered to 1 bit. `Auto` thresholds images that are almost all black and white, so QR codes and logos stay sharp. Everything else gets Atkinson dithering plus a gamma lift for thermal dot gain.
+- Sent as `GS v 0` raster bands. Photos print without a title line.
 
-### System Dependencies
-```bash
-# Ubuntu/Debian
-sudo apt-get install poppler-utils python3
+**Jobs:**
+- Copies: the PPD sets `cupsManualCopies`, and the filter prints each copy with its own cut.
+- The job title is printed (underlined, centered) above documents unless `PrintTitle=False`.
+- Markers in the PDF's text still work: `[CENTER]`, `[LEFT]`, `[RIGHT]`, `[B]…[/B]`, `[U]…[/U]` at the start of a line, and `[CUT]` on a line by itself.
 
-# CentOS/RHEL/Fedora
-sudo yum install poppler-utils python3
-# or
-sudo dnf install poppler-utils python3
-```
+## Options
 
-### Python Version
-- Python 3.6 or higher
-- Uses only standard library modules
+Settings come from, lowest to highest priority: the printer profile, the PPD's defaults, the job's options, and `ESCPOS_*` environment variables (for command-line testing).
 
-## Installation
+| PPD option | Values | Default |
+|---|---|---|
+| `EscposCols` (Columns) | 32, 42, 48 | 48 |
+| `EscposCodepage` (Character Set) | cp437, cp858, latin-1 | cp437 |
+| `PageSize` | Receipt80mm, Receipt58mm (58mm caps columns at 35 and images at 416 dots) | Receipt80mm |
+| `PrintMode` | Auto (pages without text print as images), Text, Image | Auto |
+| `Dither` | Auto, Atkinson, Floyd-Steinberg, Threshold | Auto |
+| `PrintTitle` | True, False | True |
 
-### 1. Install System Dependencies
-```bash
-sudo apt-get install poppler-utils python3
-sudo apt install avahi-daemon avahi-utils
-```
+AirPrint clients (iPhone, Mac) only show standard options such as copies and Scaling. For their jobs, change a default on the CUPS web page: http://localhost:631/printers/thermal-receipt, Administration → Set Default Options. Linux print dialogs show the menus under Printer Options, and `lp -o Name=Value` sets them per job.
 
-### 2. Copy Filter to CUPS
-```bash
-# Copy the filter to CUPS filter directory
-sudo cp pdf2escpos.py /usr/lib/cups/filter/
-sudo chmod 755 /usr/lib/cups/filter/pdf2escpos.py
+Environment variables: `ESCPOS_PROFILE`, `ESCPOS_COLS`, `ESCPOS_CODEPAGE`, plus `ESCPOS_LEFT`, `ESCPOS_RIGHT` (margin spaces, 0-50), `ESCPOS_CUT_FEED_LINES` (0-20, default 6), `ESCPOS_HEADER` and `ESCPOS_FOOTER`.
 
-# Verify installation
-ls -la /usr/lib/cups/filter/pdf2escpos.py
-```
+## Printer profiles
 
-### 3. Create PPD File
-Create `/usr/share/cups/model/thermal-receipt.ppd`:
+The `PROFILES` dict at the top of `pdf2escpos.py` holds what differs between printers: columns, print width in dots, code page numbers for `ESC t`, the cut command, red support and image gamma. `EscposProfile` picks one (default `epson-tm-t20ii`).
 
-```ppd
-*PPD-Adobe: "4.3"
-*FormatVersion: "4.3"
-*FileVersion: "1.0"
-*LanguageVersion: English
-*LanguageEncoding: ISOLatin1
-*PCFileName: "thermal.ppd"
-*Product: "(Thermal Receipt Printer)"
-*Manufacturer: "Generic"
-*ModelName: "Thermal Receipt Printer"
-*ShortNickName: "Thermal Receipt"
-*NickName: "Thermal Receipt Printer"
-*PSVersion: "(3010.000) 0"
-*LanguageLevel: "3"
-*ColorDevice: False
-*DefaultColorSpace: Gray
-*FileSystem: False
-*Throughput: "1"
-*LandscapeOrientation: Plus90
-*TTRasterizer: Type42
+| Profile | Printer | Status |
+|---|---|---|
+| `epson-tm-t20ii` | Epson TM-T20II thermal, 80mm, 203 dpi | In use |
+| `citizen-cd-s500a` | Citizen CD-S500A impact, red/black ribbon | Planned (see NOTES.md) |
+| `oki-ml420` | OKI ML420 dot matrix, ESC/P | Planned (see NOTES.md) |
 
-*OpenUI *PageSize/Page Size: PickOne
-*DefaultPageSize: Receipt80mm
-*PageSize Receipt80mm/80mm Receipt: "<</PageSize[226.77 841.89]/ImagingBBox null>>setpagedevice"
-*PageSize Receipt58mm/58mm Receipt: "<</PageSize[164.41 841.89]/ImagingBBox null>>setpagedevice"
-*CloseUI: *PageSize
+## Install
 
-*OpenUI *PageRegion: PickOne
-*DefaultPageRegion: Receipt80mm
-*PageRegion Receipt80mm/80mm Receipt: "<</PageSize[226.77 841.89]/ImagingBBox null>>setpagedevice"
-*PageRegion Receipt58mm/58mm Receipt: "<</PageSize[164.41 841.89]/ImagingBBox null>>setpagedevice"
-*CloseUI: *PageRegion
-
-*DefaultImageableArea: Receipt80mm
-*ImageableArea Receipt80mm/80mm Receipt: "0.00 0.00 226.77 841.89"
-*ImageableArea Receipt58mm/58mm Receipt: "0.00 0.00 164.41 841.89"
-
-*DefaultPaperDimension: Receipt80mm
-*PaperDimension Receipt80mm/80mm Receipt: "226.77 841.89"
-*PaperDimension Receipt58mm/58mm Receipt: "164.41 841.89"
-
-*OpenUI *EscposCols/Columns: PickOne
-*DefaultEscposCols: 48
-*EscposCols 32/32 columns: ""
-*EscposCols 42/42 columns: ""
-*EscposCols 48/48 columns: ""
-*CloseUI: *EscposCols
-
-*OpenUI *EscposCodepage/Character Set: PickOne
-*DefaultEscposCodepage: cp437
-*EscposCodepage cp437/CP437 (US): ""
-*EscposCodepage cp858/CP858 (Western Europe): ""
-*EscposCodepage latin-1/Latin-1: ""
-*CloseUI: *EscposCodepage
-
-*cupsFilter: "application/pdf 0 pdf2escpos.py"
-*cupsManualCopies: True
-```
-
-### 4. Add Printer
-```bash
-# Add a new printer using the PPD
-sudo lpadmin -p thermal-receipt -E -v file:/dev/null -P /usr/share/cups/model/thermal-receipt.ppd
-
-# Or for a real printer (USB example)
-sudo lpadmin -p thermal-receipt -E -v usb://EPSON/TM-T20II -P /usr/share/cups/model/thermal-receipt.ppd
-
-# Or for network printer -- that's what I'm using for my Epson, others untested
-sudo lpadmin -p thermal-receipt -E -v socket://192.168.1.16:9100 -P /usr/share/cups/model/thermal-receipt.ppd
-```
-
-### 5. Restart CUPS
-```bash
-
-sudo cupsctl --share-printers --remote-any --remote-admin
-sudo systemctl restart cups
-ss -lntp | grep 631
-sudo systemctl enable --now avahi-daemon
-avahi-browse -a | grep Printer
-
-```
-
-## Configuration
-
-### Environment Variables
-
-The filter can be configured using environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ESCPOS_COLS` | `48` | Text columns (1-1000) |
-| `ESCPOS_CODEPAGE` | `cp437` | Character encoding |
-| `ESCPOS_LEFT` | `0` | Left margin spaces (0-50) |
-| `ESCPOS_RIGHT` | `0` | Right margin spaces (0-50) |
-| `ESCPOS_HEADER` | `""` | Header text (max 200 chars) |
-| `ESCPOS_FOOTER` | `""` | Footer text (max 200 chars) |
-| `ESCPOS_CUT_FEED_LINES` | `6` | Line feeds before cutting (0-20) |
-
-### CUPS Backend Configuration
-
-For persistent configuration, modify the CUPS backend or create a wrapper script:
+Needs `python3`, `poppler-utils` (`pdftohtml`, `pdftotext`, `pdftoppm`) and `python3-pil` (Pillow, for images; text prints without it).
 
 ```bash
-#!/bin/bash
-# /usr/lib/cups/filter/pdf2escpos-wrapper.py
+sudo apt install python3 poppler-utils python3-pil
 
-export ESCPOS_COLS=42
-export ESCPOS_HEADER="STORE RECEIPT"
-export ESCPOS_FOOTER="Thank you for your business!"
+# First time only: create the queue with the PPD
+sudo lpadmin -p thermal-receipt -E -v socket://192.168.1.16:9100 -P ppd/thermal-receipt.ppd
+sudo lpadmin -p thermal-receipt -o printer-is-shared=true
+sudo cupsctl --share-printers
+sudo systemctl enable --now avahi-daemon   # AirPrint discovery
 
-exec /usr/lib/cups/filter/pdf2escpos.py "$@"
+# Install or update the filter and PPD
+sudo ./install.sh                  # filter + ppd/thermal-receipt.ppd
+sudo ./install.sh --filter-only    # filter only
+sudo ./install.sh --test tests/fixtures/receipt.pdf   # and print a test page
+sudo ./install.sh --rollback       # back to the previous filter and PPD
 ```
 
-## Usage
+`install.sh` won't install a filter that doesn't compile or a PPD that fails `cupstestppd`. Each install keeps the previous filter as `/usr/lib/cups/filter/pdf2escpos.py.bak` and the previous PPD as `/etc/cups/ppd/<queue>.ppd.bak`. It needs a real terminal for `sudo`.
 
-### Command Line Testing
-```bash
-# Test with file
-python3 pdf2escpos.py 1234 user "Test Document" 1 "" document.pdf > output.escpos
+The PPD sends `application/pdf`, `image/jpeg` and `image/png` straight to the filter. Images have to skip CUPS's own image filter, which would crop a photo to fill the long receipt page.
 
-# Test with stdin
-cat document.pdf | python3 pdf2escpos.py 1234 user "Test" 1 "" - > output.escpos
-
-# Test with custom settings
-ESCPOS_COLS=32 ESCPOS_HEADER="RECEIPT" python3 pdf2escpos.py 1234 user "Test" 1 "" document.pdf > output.escpos
-```
-
-### Printing from Applications
-Once configured, any application can print PDFs to the thermal printer:
+## Testing
 
 ```bash
-# Command line
-lp -d thermal-receipt document.pdf
+python3 -m unittest discover tests
 
-# From browser or other applications
-# Select "Thermal Receipt Printer" as the destination
+# Run the filter by hand (argv: job user title copies options file)
+python3 pdf2escpos.py 1 me "Title" 1 "EscposCols=42" tests/fixtures/receipt.pdf > out.escpos
+
+# Read the output without printing: [B]…[/B], [2H], [CENTER], [IMG 576x256], [CUT] …
+python3 tools/escpos_preview.py out.escpos
+python3 tools/escpos_preview.py --png-dir /tmp/imgs out.escpos   # also save images
+
+# Send it to the printer directly
+lp -d thermal-receipt -o raw out.escpos
 ```
 
-## Text Formatting
+Fixtures are in `tests/fixtures/`. `receipt.pdf` is built from `receipt.ps` with `ps2pdf`, and the image fixtures come from `make_image_fixtures.py`. `sample-invoice.pdf` and `sample-textbook.pdf` are real-world layouts.
 
-The filter supports simple formatting directives within the PDF text:
+The filter logs to the CUPS error log as `pdf2escpos:`: the settings used, which extraction path ran, and each image's size and dither method. `DEBUG` lines need `sudo cupsctl --debug-logging` (turn it off afterwards with `--no-debug-logging`). Then run `sudo tail -f /var/log/cups/error_log`.
 
-### Alignment
-- `[LEFT]` - Left align text (default)
-- `[CENTER]` - Center align text  
-- `[RIGHT]` - Right align text
-
-### Text Style
-- `[B]text[/B]` - Bold text
-- `[U]text[/U]` - Underlined text
-
-### Special Commands
-- `[CUT]` - Insert paper cut command
-
-### Example PDF Content
-```
-[CENTER][B]STORE RECEIPT[/B]
-
-[LEFT]Date: 2024-09-22
-Time: 14:30:22
-
-[CENTER]Items Purchased
-
-[LEFT]Item 1 .............. $10.00
-Item 2 .............. $15.50
-Tax .................. $2.55
-
-[CENTER][B]Total: $28.05[/B]
-
-[CUT]
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Filter not found**
-   ```bash
-   # Check filter permissions
-   ls -la /usr/lib/cups/filter/pdf2escpos.py
-   # Should be executable (755)
-   ```
-
-2. **pdftotext command not found**
-   ```bash
-   # Install poppler-utils
-   sudo apt-get install poppler-utils
-   ```
-
-3. **No output or garbled text**
-   ```bash
-   # Test filter directly
-   python3 pdf2escpos.py 1234 user "Test" 1 "" test.pdf | od -c
-   # Should show ESC/POS commands
-   ```
-
-4. **Wrong character encoding**
-   - Set `ESCPOS_CODEPAGE` to match your printer
-   - Common options: `cp437`, `cp858`, `latin-1`
-
-### Debugging
-
-Enable debug output:
-```bash
-# Add debug prints to the script
-# Check CUPS error log
-sudo tail -f /var/log/cups/error_log
-
-# Test individual components
-pdftotext -layout -nopgbrk test.pdf -
-```
-
-### Log Files
-- CUPS error log: `/var/log/cups/error_log`
-- CUPS access log: `/var/log/cups/access_log`
-
-## Printer Compatibility
-
-### Tested Printers
-- Epson TM-T20II/III
-- Star TSP100 series
-- Generic ESC/POS thermal printers
-
-### ESC/POS Commands Used
-- `ESC @` - Initialize printer
-- `ESC M` - Select font
-- `ESC a` - Text alignment
-- `ESC E` - Bold on/off
-- `ESC -` - Underline on/off
-- `ESC m` - Paper cut (0x1B 0x6D)
-
-## Security Considerations
-
-- Input validation on all environment variables
-- File path sanitization to prevent directory traversal
-- Bounds checking on configuration values
-- Safe temporary file handling
-- Proper subprocess execution
+`cupsfilter` isn't useful for testing here: cups-filters 2.0 converts everything to PostScript and never calls this filter.
 
 ## License
 
-This project is released under the MIT License.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make changes with proper error handling
-4. Add tests for new functionality
-5. Submit a pull request
-
-## Support
-
-For issues and questions:
-1. Check the troubleshooting section
-2. Review CUPS error logs
-3. Test the filter directly from command line
+MIT

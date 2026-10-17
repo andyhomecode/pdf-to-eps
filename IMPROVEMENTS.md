@@ -1,5 +1,16 @@
 # pdf2escpos: shared improvements now, CD-S500A next, OKI ML420 later
 
+## Status (2026-10-17)
+
+**Phase 1 is done**, installed on the thinkcentre and tested on the Epson: receipt, invoice, image and QR fixtures, and photos from the iPhone. Changes from this plan:
+- Phone photos arrive as `image/jpeg`, and CUPS's own image filter cropped them to fill the 80x297mm page. The PPD now sends JPEG and PNG straight to the filter.
+- Photos and image-only PDFs print without the title line.
+- Auto dither thresholds at 90% near-black/white pixels, not 95%. The QR fixture measured 94%.
+- `cupsfilter` can't exercise this filter under cups-filters 2.0, so verification step 3 doesn't apply.
+- `spe033.pdf` was replaced by the fixtures in `tests/fixtures/`.
+
+Phases 2 and 3 are unchanged. `NOTES.md` has the checklists and the ideas not done yet. The hand-off notes below are kept for history.
+
 ## Hand-off notes for the thinkcentre session
 
 - The repo is `https://github.com/andyhomecode/pdf-to-eps` (branch `main`). To get it on the thinkcentre, commit and push `IMPROVEMENTS.md` from the laptop first, then `git clone`/`git pull` there.
