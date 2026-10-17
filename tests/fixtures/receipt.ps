@@ -1,0 +1,32 @@
+%!PS
+% Source for receipt.pdf, a small test receipt. Rebuild with:
+%   ps2pdf -sPAPERSIZE=a4 tests/fixtures/receipt.ps tests/fixtures/receipt.pdf
+
+/center { /y exch def /s exch def s stringwidth pop 595 exch sub 2 div y moveto s show } def  % (text) y center
+/right { /y exch def /s exch def 523 s stringwidth pop sub y moveto s show } def             % (text) y right
+
+/Helvetica-Bold findfont 24 scalefont setfont
+(CORNER CAFE) 760 center
+
+/Helvetica findfont 12 scalefont setfont
+(123 Main Street) 735 center
+
+72 690 moveto (Latte ........................................ $4.50) show
+72 674 moveto (Croissant .................................... $3.25) show
+72 658 moveto (------------------------------------------------------------) show
+
+/Helvetica-Bold findfont 12 scalefont setfont
+72 642 moveto (Total) show
+($7.75) 642 right
+
+/Symbol findfont 12 scalefont setfont
+72 610 moveto <b7> show
+/Helvetica findfont 12 scalefont setfont
+86 610 moveto (Free refills on drip coffee) show
+
+72 580 moveto (Thank you for visiting. This paragraph is long enough that it wraps across) show
+72 566 moveto (more than one line on the page, so the filter should rejoin it into one) show
+72 552 moveto (paragraph and rewrap it to the receipt width.) show
+
+(1) 40 center
+showpage
