@@ -59,7 +59,8 @@ cupstestppd -W translations "$PPD" >/dev/null || {
 }
 
 if [ -z "$URI" ]; then
-    URI=$(lpinfo --include-schemes usb -v | awk 'tolower($2) ~ /^usb:\/\/citizen/ { print $2; exit }')
+    # The CD-S500A reports itself as CBM (Citizen Business Machines): usb://CBM/CD-S500
+    URI=$(lpinfo --include-schemes usb -v | awk 'tolower($2) ~ /^usb:\/\/(citizen|cbm)\// { print $2; exit }')
 fi
 if [ -z "$URI" ]; then
     echo "No Citizen printer found on USB. Is it on and plugged in? USB printers seen:" >&2

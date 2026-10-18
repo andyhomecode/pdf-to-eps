@@ -36,7 +36,7 @@ Settings come from, lowest to highest priority: the printer profile, the PPD's d
 
 | PPD option | Values | Default |
 |---|---|---|
-| `EscposCols` (Columns) | 32, 42, 48. Citizen: 33, 40, 42 | 48. Citizen: 40 |
+| `EscposCols` (Columns) | 32, 42, 48. Citizen: 33, 40 | 48. Citizen: 40 |
 | `EscposCodepage` (Character Set) | cp437, cp858, latin-1 | cp437 |
 | `PageSize` | Main queue: Receipt80mm, Receipt58mm (58mm caps columns at 35 and images at 416 dots). Text queue: Letter, A4 | Receipt80mm; Letter on the text queue |
 | `PrintMode` | Auto (receipt-width pages as drawn, others laid out as text), Text (lay out every page as text, reflowed), Image (every page as drawn) | Auto |
@@ -56,7 +56,7 @@ The `PROFILES` dict at the top of `pdf2escpos.py` holds what differs between pri
 | Profile | Printer | Status |
 |---|---|---|
 | `epson-tm-t20ii` | Epson TM-T20II thermal, 80mm, 203 dpi | In use |
-| `citizen-cd-s500a` | Citizen CD-S500A impact, red/black ribbon. Text only: images are left out, and `PrintMode`, `Dither` and `EmbeddedImages` don't apply | Set up on the Pi, not yet checked on the printer (see NOTES.md) |
+| `citizen-cd-s500a` | Citizen CD-S500A impact, red/black ribbon, no cutter (jobs end with a feed to tear off), 40 columns in Font B, € prints as EUR. Text only: images are left out, and `PrintMode`, `Dither` and `EmbeddedImages` don't apply | Set up on the Pi, test page checked; phones and feed length still to check (see NOTES.md) |
 | `oki-ml420` | OKI ML420 dot matrix, ESC/P | Planned (see NOTES.md) |
 
 ## Install
@@ -91,7 +91,7 @@ The PPD sends `application/pdf`, `image/jpeg` and `image/png` straight to the fi
 
 ### Citizen CD-S500A on a Raspberry Pi
 
-The Pi runs its own CUPS with this filter, and the printer plugs into it by USB. On Raspberry Pi OS, clone the repo and run:
+The Pi (`printserver-citizen`) runs its own CUPS with this filter, and the printer plugs into it by USB. SSH in as `andy@printserver-citizen.local` from `andy-thinkpad` (key login only). On Raspberry Pi OS, clone the repo and run:
 
 ```bash
 sudo ./setup-pi.sh                 # installs CUPS, avahi and poppler, finds the printer, creates receipt-citizen
@@ -99,7 +99,7 @@ sudo ./setup-pi.sh --uri 'usb://...'   # if it can't find the printer (URIs from
 python3 tools/test_page.py --profile citizen-cd-s500a | lp -d receipt-citizen -o raw
 ```
 
-The queue has Letter and A4 paper, like `thermal-receipt-text`, so every document is reflowed as text to 40 columns. Bold text, headings and red text print red; photos print a "text only" notice. Running `setup-pi.sh` again (or `sudo ./install.sh --queue receipt-citizen`) updates the filter and PPD.
+The queue has Letter and A4 paper, like `thermal-receipt-text`, so every document is reflowed as text to 40 columns. Bold text, headings and red text print red; photos print a "text only" notice. Running `setup-pi.sh` again (or `sudo ./install.sh --queue receipt-citizen`) updates the filter and PPD. Its defaults are on http://printserver-citizen.local:631/printers/receipt-citizen (Administration → Set Default Options).
 
 ## Testing
 

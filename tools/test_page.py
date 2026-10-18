@@ -42,7 +42,7 @@ def test_page(profile_name: str) -> bytes:
         out.extend(f.ESC + b"M" + (f.FONT_A if name == "Font A" else f.FONT_B))
         line(f"{name} (ESC M):")
         line(ruler(RULER_COLS))
-    out.extend(f.ESC + b"M" + f.FONT_A)
+    out.extend(f.ESC + b"M" + profile["font"])
     line()
     line("Normal text")
     out.extend(f.bold_on()); line("Bold (ESC E 1)"); out.extend(f.bold_off())
@@ -59,7 +59,8 @@ def test_page(profile_name: str) -> bytes:
         line(f"{name} ({n}): {SAMPLE}", codec)
     out.extend(f.ESC + b"t" + bytes([profile["codepages"][profile["default_codepage"]][1]]))
     line()
-    line(f"Cut ({profile['cut'].hex(' ')}) after 6 lines:")
+    line(f"Cut ({profile['cut'].hex(' ')}) after 6 lines:" if profile["cut"]
+         else "No cutter: feed 6 lines to tear off")
     out.extend(f.lf(6) + profile["cut"])
     return bytes(out)
 

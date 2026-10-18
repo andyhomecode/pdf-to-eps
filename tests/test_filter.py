@@ -123,6 +123,8 @@ class TestSanitize(unittest.TestCase):
         # cp437 has é; cp1252 has smart quotes and the euro sign
         self.assertEqual(f.sanitize("caf\u00e9", "cp437"), "caf\u00e9")
         self.assertEqual(f.sanitize("\u201cx\u201d \u20ac", "cp1252"), "\u201cx\u201d \u20ac")
+        # ...unless the printer doesn't print it
+        self.assertEqual(f.sanitize("\u20ac10", "cp1252", "\u20ac"), "EUR10")
 
     def test_accents_stripped(self):
         self.assertEqual(f.sanitize("\u0141\u00f3d\u017a", "cp437"), "L\u00f3dz")
@@ -466,6 +468,12 @@ class TestCitizen(unittest.TestCase):
         self.assertEqual((s.profile_name, s.cols, s.codepage_n), ("citizen-cd-s500a", 40, 0))
         self.assertEqual((s.print_mode, s.embedded_images, s.text_only, s.bold_red),
                          ("text", False, True, True))
+
+    def test_font_b_and_no_euro(self):
+        # From the test page: Font A fits only 33 columns, and no code page prints €
+        s = f.resolve_settings(argv(options="EscposCodepage=latin-1"), {"PPD": CITIZEN_PPD})
+        self.assertTrue(f.init_seq(s).startswith(b"\x1b@\x1bM\x01"))
+        self.assertEqual(f.encode_text("café €10", s), b"caf\xe9 EUR10")
         s = f.resolve_settings(argv(options="BoldInRed=False"), {"PPD": CITIZEN_PPD})
         self.assertFalse(s.bold_red)
         # The Epson has no red, so bold stays bold
@@ -476,7 +484,7 @@ class TestCitizen(unittest.TestCase):
         self.assertIn("[MODE 2H 2W][RED]CORNER CAFE\n[/RED]", text)
         self.assertIn("[RED]Total" + " " * 30 + "$7.75\n[/RED]", text)
         self.assertNotIn("[B]", text)
-        self.assertIn("[CUT partial]", text)  # GS V 1
+        self.assertNotIn("[CUT", text)  # no cutter fitted
 
     def test_bold_words_print_red(self):
         text = preview(NOTICE_PDF, ppd=CITIZEN_PPD)
@@ -509,5 +517,6 @@ class TestCitizen(unittest.TestCase):
         text = escpos_preview.Decoder(test_page.test_page("citizen-cd-s500a"), "cp437", None).run()
         self.assertIn("[RED]Red (ESC r 1)\n[/RED]", text)
         self.assertIn("....:....1....:....2....:....3....:....4....:...\n", text)
-        self.assertTrue(text.rstrip().endswith("[CUT partial]"))
+        self.assertTrue(text.rstrip().endswith("No cutter: feed 6 lines to tear off"))
+        self.assertNotIn("[CUT", text)
         self.assertNotIn("[?", text)

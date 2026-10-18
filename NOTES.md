@@ -5,10 +5,10 @@
 | Printer | Type | Connection | Queue | Status |
 |---|---|---|---|---|
 | Epson TM-T20II | Thermal receipt, 80mm, 203 dpi, autocutter | Ethernet, `socket://192.168.1.16:9100` (the "receipt" box on the LAN) | `thermal-receipt` (80mm, as drawn) and `thermal-receipt-text` (Letter, reflowed) | In use, shared over AirPrint |
-| Citizen CD-S500A | 9-pin impact receipt, ESC/POS, USB-B, 76mm paper (40 columns), black/red ribbon (IR-31) | USB-B into a Raspberry Pi 3 B running CUPS | `receipt-citizen` (Letter/A4, reflowed, text only, bold in red) | Phase 2: set up, not yet checked on the printer |
+| Citizen CD-S500A | 9-pin impact receipt, ESC/POS, USB-B, 76mm paper (40 columns), black/red ribbon (IR-31), no cutter | USB-B into a Raspberry Pi 3 B running CUPS (`printserver-citizen`) | `receipt-citizen` (Letter/A4, reflowed, text only, bold in red) | Phase 2: queue set up on the Pi, test page checked |
 | OKI ML420 | 9-pin dot matrix, Epson FX / IBM emulation (ESC/P, not ESC/POS), USB-B | Not connected yet | its own queue (planned) | Phase 3 |
 
-The Epson queues run on the ThinkCentre and the Citizen's on the Pi (`/usr/lib/cups/filter/pdf2escpos.py`, PPDs in `ppd/`). All and are shared over AirPrint, so iPhones and Macs print to them directly. How the server side is set up, and how to rebuild it, is in the ThinkCentre reference doc (`thinkcentre-reference.md` in Dropbox, section "Receipt Printer").
+The Epson queues run on the ThinkCentre and the Citizen's on the Pi `printserver-citizen` (`/usr/lib/cups/filter/pdf2escpos.py`, PPDs in `ppd/`). All are shared over AirPrint, so iPhones and Macs print to them directly. How the server side is set up, and how to rebuild it, is in the ThinkCentre reference doc (`thinkcentre-reference.md` in Dropbox, section "Receipt Printer").
 
 ## How a job reaches the printer
 
@@ -37,11 +37,25 @@ AirPrint doesn't show the custom menus (Columns, Character Set, Print Mode, Dith
 Decided 2026-10-17: the **Raspberry Pi 3 B is the Citizen's print server**, running its own CUPS, this filter and avahi, with the printer on its USB. `setup-pi.sh` sets it up. The printer is **text only** (no photos, drawings or images in PDFs; Andy wants it that way, and it means the `ESC *` image path never needs writing) and **bold prints red** instead of bold (`BoldInRed`, default on). Headings and red text in the PDF print red too.
 
 - The PPD has Letter and A4 paper, like `thermal-receipt-text`, so phones lay out a normal page and the filter reflows it. It says it's a color device, so iOS keeps red text red in the PDF it sends.
-- Column count (40), the code page numbers, the `GS V 1` cut, `ESC r` red, and red switching mid-line all come from the CD-S500 family's spec sheets and ESC/POS, not from the printer.
+- It has no cutter, so jobs end with a feed (`cut_feed_lines`, 6) to tear off, and the profile sends no cut command.
+- Test page results (2026-10-18):
+  - Columns: the printer's default font and Font B (`ESC M 1`) fit 40, Font A (`ESC M 0`) only 33. The profile selects Font B; it used to select Font A, which would have wrapped every 40-column line.
+  - Bold, red (whole line and mid-line), underline, double height, double width and double size all print.
+  - Code pages: cp437 (0), cp858 (19) and latin-1 (16) all print `é ü ñ £ ½ ¿ ¡` right. None prints `€`: cp437 has none, and cp858 and latin-1 print a stray loopy glyph in its place. The profile's `no_glyph` makes `€` print as `EUR` on every code page.
+  - No cutter (see above).
+
+The Pi so far (2026-10-18):
+- Hostname `printserver-citizen`, reached as `printserver-citizen.local` over mDNS (192.168.1.29 on 2026-10-18). Its CUPS page is http://printserver-citizen.local:631.
+- SSH as `andy@printserver-citizen.local`, public-key login only, from `andy-thinkpad`'s key.
+- git is installed, with the Pi's own SSH key added to GitHub, and this repo is cloned on it.
+- The printer shows up as a USB printer: `lsusb` gives `2730:1004 Citizen PPU-700` (interface board IF-USB-P03, interface class 7 Printer) and `/dev/usb/lp0` exists. CUPS lists it as `usb://CBM/CD-S500` (CBM is Citizen Business Machines), not a serial port.
+- The first `sudo ./setup-pi.sh` installed CUPS, avahi and poppler but didn't find the printer, because it only looked for `usb://Citizen...`. It now accepts `usb://CBM/...` too. Rerun with `--uri 'usb://CBM/CD-S500'`, it created `receipt-citizen`, and the test page printed.
+
+To update it after a change: `ssh -t andy@printserver-citizen.local`, `cd` into the clone, `git pull`, then `sudo ./setup-pi.sh` (it updates the filter and PPD and keeps the queue's defaults).
 
 Still to do:
-1. Run `sudo ./setup-pi.sh` on the Pi with the printer plugged in. If no `usb://` URI shows up, the printer may present a serial port instead (`/dev/ttyACM0`).
-2. Print `tools/test_page.py --profile citizen-cd-s500a` raw, and fix the profile from what prints: where the ruler wraps (columns), red (whole line and mid-line), double sizes, which code pages print `é £ €` right, and the cut (fall back to a feed if it has no autocutter). The cutter sits further from the head than on the Epson, so `cut_feed_lines` may need raising.
+1. ~~Run `setup-pi.sh` and create `receipt-citizen`~~ (done 2026-10-18).
+2. ~~Check the test page and fix the profile~~ (done 2026-10-18, results above). Still to check: whether 6 lines of feed bring the last line past the tear bar.
 3. Print from the iPhone and the Mac, then update this file and the reference doc.
 4. Later: the OKI can go on the same Pi as a second queue.
 

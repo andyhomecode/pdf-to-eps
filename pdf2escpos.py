@@ -34,6 +34,7 @@ except ImportError:  # text still prints without Pillow
 PROFILES = {
     "epson-tm-t20ii": {
         "cols": 48,          # 80mm roll, Font A (12x24)
+        "font": b'\x00',     # ESC M 0, Font A
         "cols_58mm": 35,     # 58mm roll, Font A, per Epson spec
         "dots": 576,         # print width in dots on 80mm paper (203 dpi)
         "dots_58mm": 416,    # 58mm paper, rounded down to a whole byte
@@ -46,6 +47,7 @@ PROFILES = {
             "latin-1": ("cp1252", 16), # WPC1252, the printer's closest Latin-1 table
         },
         "default_codepage": "cp437",
+        "no_glyph": "",      # characters the code pages claim but don't print
         "cut": b'\x1b\x6d',  # ESC m partial cut; known to work on the TM-T20II
         "red": False,       # single-color thermal; red text prints bold
         "bold_red": False,
@@ -53,7 +55,8 @@ PROFILES = {
     },
     # Unverified until it's connected: print tools/test_page.py and fix from what prints
     "citizen-cd-s500a": {
-        "cols": 40,          # 76mm roll, per Citizen's spec sheets (33 on 69.5mm)
+        "cols": 40,          # 76mm roll in Font B; Font A fits only 33 (test page, 2026-10-18)
+        "font": b'\x01',     # ESC M 1, Font B
         "dots": 0,           # text only, so no image width
         "paper_pt": 215.43,  # 76mm paper width in points
         "codepages": {
@@ -62,7 +65,8 @@ PROFILES = {
             "latin-1": ("cp1252", 16),
         },
         "default_codepage": "cp437",
-        "cut": b'\x1d\x56\x01',  # GS V 1 partial cut (the A model has the autocutter)
+        "no_glyph": "\u20ac",  # € prints as a stray glyph in cp858 and latin-1, so EUR
+        "cut": b'',          # no cutter fitted: jobs end with a feed to tear off
         "red": True,         # black/red ribbon (IR-31), ESC r 1
         "bold_red": True,    # bold prints in red instead of bold
         "images": False,     # text only: photos, drawings and images in PDFs are left out
@@ -277,8 +281,9 @@ def encodable(ch: str, codec: str) -> bool:
         return False
 
 
-def sanitize(s: str, codec: str) -> str:
-    """Make text safe to send: no control bytes, only characters the code page has."""
+def sanitize(s: str, codec: str, no_glyph: str = "") -> str:
+    """Make text safe to send: no control bytes, only characters the code page
+    has. Characters in no_glyph are treated as missing from it."""
     out = []
     for ch in s.expandtabs(8):
         if ch == "\n":
@@ -291,7 +296,7 @@ def sanitize(s: str, codec: str) -> str:
             # Superscript letters (22nd written as 22\u207f\u1d48) print as plain
             # letters; superscript digits like \u00b2 stay as they are
             out.append(unicodedata.normalize("NFKD", ch))
-        elif encodable(ch, codec):
+        elif encodable(ch, codec) and ch not in no_glyph:
             out.append(ch)
         elif ch in CHAR_MAP:
             out.append(CHAR_MAP[ch])
@@ -309,12 +314,12 @@ def sanitize(s: str, codec: str) -> str:
 # ---------- ESC/POS output ----------
 
 def encode_text(s: str, settings: Settings) -> bytes:
-    return sanitize(s, settings.codec).encode(settings.codec, errors='replace')
+    return sanitize(s, settings.codec, settings.profile["no_glyph"]).encode(settings.codec, errors='replace')
 
 def init_seq(settings: Settings) -> bytes:
     out = bytearray()
     out += ESC + b'@'              # Initialize
-    out += ESC + b'M' + FONT_A     # Font A (0); Font B is \x01
+    out += ESC + b'M' + settings.profile["font"]
     if DENSE_LINE_SPACING:
         out += ESC + b'3' + DENSE_LINE_SPACING_DOTS  # 22-dot line spacing (denser)
     else:
