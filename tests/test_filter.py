@@ -481,7 +481,8 @@ class TestCitizen(unittest.TestCase):
 
     def test_bold_prints_red(self):
         text = preview(RECEIPT_PDF, ppd=CITIZEN_PPD)
-        self.assertIn("[MODE 2H 2W][RED]CORNER CAFE\n[/RED]", text)
+        self.assertIn("[MODE fontB 2H 2W][RED]CORNER CAFE\n[/RED][MODE fontB]", text)
+        self.assertNotIn("[MODE normal]", text)  # ESC ! 0 would switch to Font A (33 columns)
         self.assertIn("[RED]Total" + " " * 30 + "$7.75\n[/RED]", text)
         self.assertNotIn("[B]", text)
         self.assertNotIn("[CUT", text)  # no cutter fitted
@@ -517,6 +518,6 @@ class TestCitizen(unittest.TestCase):
         text = escpos_preview.Decoder(test_page.test_page("citizen-cd-s500a"), "cp437", None).run()
         self.assertIn("[RED]Red (ESC r 1)\n[/RED]", text)
         self.assertIn("....:....1....:....2....:....3....:....4....:...\n", text)
-        self.assertTrue(text.rstrip().endswith("No cutter: feed 6 lines to tear off"))
+        self.assertTrue(text.rstrip().endswith("No cutter: feed 7 lines to tear off"))
         self.assertNotIn("[CUT", text)
         self.assertNotIn("[?", text)

@@ -49,6 +49,7 @@ PROFILES = {
         "default_codepage": "cp437",
         "no_glyph": "",      # characters the code pages claim but don't print
         "cut": b'\x1b\x6d',  # ESC m partial cut; known to work on the TM-T20II
+        "cut_feed_lines": 6, # feed before the cut, so the last line clears the cutter
         "red": False,       # single-color thermal; red text prints bold
         "bold_red": False,
         "images": True,
@@ -67,6 +68,7 @@ PROFILES = {
         "default_codepage": "cp437",
         "no_glyph": "\u20ac",  # € prints as a stray glyph in cp858 and latin-1, so EUR
         "cut": b'',          # no cutter fitted: jobs end with a feed to tear off
+        "cut_feed_lines": 7, # brings the last Font B line past the tear bar
         "red": True,         # black/red ribbon (IR-31), ESC r 1
         "bold_red": True,    # bold prints in red instead of bold
         "images": False,     # text only: photos, drawings and images in PDFs are left out
@@ -227,7 +229,7 @@ def resolve_settings(argv: List[str], env: Dict[str, str]) -> Settings:
         codepage_n=codepage_n,
         left=bounded_int(env.get("ESCPOS_LEFT"), 0, 0, 50),
         right=bounded_int(env.get("ESCPOS_RIGHT"), 0, 0, 50),
-        cut_feed_lines=bounded_int(env.get("ESCPOS_CUT_FEED_LINES"), 6, 0, 20),
+        cut_feed_lines=bounded_int(env.get("ESCPOS_CUT_FEED_LINES"), profile["cut_feed_lines"], 0, 20),
         header=env.get("ESCPOS_HEADER", "")[:200],
         footer=env.get("ESCPOS_FOOTER", "")[:200],
         copies=bounded_int(argv[4] if len(argv) > 4 else None, 1, 1, MAX_COPIES),
@@ -1205,6 +1207,11 @@ def layout_plain(text: str, settings: Settings) -> List[PrintLine]:
 
 SIZE_MODE = {"": 0x00, "2H": 0x10, "2W2H": 0x30}
 
+def print_mode(size: str, settings: Settings) -> bytes:
+    """ESC ! for a text size. Its bit 0 also picks the font, so it keeps the
+    profile's (ESC ! 0 alone would switch the Citizen back to Font A)."""
+    return ESC + b'!' + bytes([SIZE_MODE[size] | settings.profile["font"][0]])
+
 def render_line(pl: PrintLine, settings: Settings) -> bytes:
     if pl.image:
         return align_left() + pl.image
@@ -1215,7 +1222,7 @@ def render_line(pl: PrintLine, settings: Settings) -> bytes:
     out = bytearray()
     out += {"center": align_center(), "right": align_right()}.get(pl.align, align_left())
     if pl.size:
-        out += ESC + b'!' + bytes([SIZE_MODE[pl.size]])
+        out += print_mode(pl.size, settings)
     # Red text prints red, or bold without red; bold prints red with bold_red
     has_red = settings.profile["red"]
     red = has_red and (pl.red or (pl.bold and settings.bold_red))
@@ -1241,7 +1248,7 @@ def render_line(pl: PrintLine, settings: Settings) -> bytes:
     if bold:
         out += bold_off()
     if pl.size:
-        out += ESC + b'!' + b'\x00'
+        out += print_mode("", settings)
     return bytes(out)
 
 def tidy(lines: List[PrintLine]) -> List[PrintLine]:

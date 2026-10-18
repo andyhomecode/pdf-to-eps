@@ -49,9 +49,10 @@ def test_page(profile_name: str) -> bytes:
     out.extend(f.red_on()); line("Red (ESC r 1)"); out.extend(f.red_off())
     out.extend(b"Black, " + f.red_on() + b"red" + f.red_off() + b", black in one line\n")
     out.extend(f.underline_on()); line("Underlined (ESC - 1)"); out.extend(f.underline_off())
+    font = profile["font"][0]  # ESC ! bit 0 is the font, so keep the profile's
     for mode, name in ((0x10, "Double height"), (0x20, "Double width"), (0x30, "Double size")):
-        out.extend(f.ESC + b"!" + bytes([mode])); line(f"{name} (ESC ! {mode})")
-    out.extend(f.ESC + b"!" + b"\x00")
+        out.extend(f.ESC + b"!" + bytes([mode | font])); line(f"{name} (ESC ! {mode | font})")
+    out.extend(f.ESC + b"!" + bytes([font]))
     line()
     line("Code pages (ESC t n):")
     for name, (codec, n) in profile["codepages"].items():
@@ -59,9 +60,10 @@ def test_page(profile_name: str) -> bytes:
         line(f"{name} ({n}): {SAMPLE}", codec)
     out.extend(f.ESC + b"t" + bytes([profile["codepages"][profile["default_codepage"]][1]]))
     line()
-    line(f"Cut ({profile['cut'].hex(' ')}) after 6 lines:" if profile["cut"]
-         else "No cutter: feed 6 lines to tear off")
-    out.extend(f.lf(6) + profile["cut"])
+    feed = profile["cut_feed_lines"]
+    line(f"Cut ({profile['cut'].hex(' ')}) after {feed} lines:" if profile["cut"]
+         else f"No cutter: feed {feed} lines to tear off")
+    out.extend(f.lf(feed) + profile["cut"])
     return bytes(out)
 
 

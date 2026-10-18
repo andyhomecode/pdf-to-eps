@@ -47,7 +47,7 @@ Settings come from, lowest to highest priority: the printer profile, the PPD's d
 
 AirPrint clients (iPhone, Mac) only show standard options such as copies and Scaling. For their jobs, change a default on the CUPS web page: http://localhost:631/printers/thermal-receipt, Administration → Set Default Options. Linux print dialogs show the menus under Printer Options, and `lp -o Name=Value` sets them per job.
 
-Environment variables: `ESCPOS_PROFILE`, `ESCPOS_COLS`, `ESCPOS_CODEPAGE`, plus `ESCPOS_LEFT`, `ESCPOS_RIGHT` (margin spaces, 0-50), `ESCPOS_CUT_FEED_LINES` (0-20, default 6), `ESCPOS_HEADER` and `ESCPOS_FOOTER`.
+Environment variables: `ESCPOS_PROFILE`, `ESCPOS_COLS`, `ESCPOS_CODEPAGE`, plus `ESCPOS_LEFT`, `ESCPOS_RIGHT` (margin spaces, 0-50), `ESCPOS_CUT_FEED_LINES` (0-20, default from the profile: 6 on the Epson, 7 on the Citizen), `ESCPOS_HEADER` and `ESCPOS_FOOTER`.
 
 ## Printer profiles
 

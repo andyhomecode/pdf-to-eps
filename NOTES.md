@@ -37,9 +37,9 @@ AirPrint doesn't show the custom menus (Columns, Character Set, Print Mode, Dith
 Decided 2026-10-17: the **Raspberry Pi 3 B is the Citizen's print server**, running its own CUPS, this filter and avahi, with the printer on its USB. `setup-pi.sh` sets it up. The printer is **text only** (no photos, drawings or images in PDFs; Andy wants it that way, and it means the `ESC *` image path never needs writing) and **bold prints red** instead of bold (`BoldInRed`, default on). Headings and red text in the PDF print red too.
 
 - The PPD has Letter and A4 paper, like `thermal-receipt-text`, so phones lay out a normal page and the filter reflows it. It says it's a color device, so iOS keeps red text red in the PDF it sends.
-- It has no cutter, so jobs end with a feed (`cut_feed_lines`, 6) to tear off, and the profile sends no cut command.
+- It has no cutter, so jobs end with a feed to tear off, and the profile sends no cut command. The feed is the profile's `cut_feed_lines`: 7 lines of Font B brings the last line past the tear bar (6 fell one line short, 2026-10-18).
 - Test page results (2026-10-18):
-  - Columns: the printer's default font and Font B (`ESC M 1`) fit 40, Font A (`ESC M 0`) only 33. The profile selects Font B; it used to select Font A, which would have wrapped every 40-column line.
+  - Columns: the printer's default font and Font B (`ESC M 1`) fit 40, Font A (`ESC M 0`) only 33. The profile selects Font B; it used to select Font A, which would have wrapped every 40-column line. `ESC !` (text size) also sets the font in bit 0, so the filter keeps the profile's font in it; a plain `ESC ! 0` after a heading put the first receipt back in Font A.
   - Bold, red (whole line and mid-line), underline, double height, double width and double size all print.
   - Code pages: cp437 (0), cp858 (19) and latin-1 (16) all print `é ü ñ £ ½ ¿ ¡` right. None prints `€`: cp437 has none, and cp858 and latin-1 print a stray loopy glyph in its place. The profile's `no_glyph` makes `€` print as `EUR` on every code page.
   - No cutter (see above).
@@ -55,9 +55,10 @@ To update it after a change: `ssh -t andy@printserver-citizen.local`, `cd` into 
 
 Still to do:
 1. ~~Run `setup-pi.sh` and create `receipt-citizen`~~ (done 2026-10-18).
-2. ~~Check the test page and fix the profile~~ (done 2026-10-18, results above). Still to check: whether 6 lines of feed bring the last line past the tear bar.
-3. Print from the iPhone and the Mac, then update this file and the reference doc.
-4. Later: the OKI can go on the same Pi as a second queue.
+2. ~~Check the test page and fix the profile~~ (done 2026-10-18, results above). The first receipt sent straight to `/dev/usb/lp0` printed right: 40 columns, red heading and total.
+3. Print through CUPS: on 2026-10-18 job `receipt-citizen-2` sat at "Sending data to printer" and printed nothing, while the same bytes written to `/dev/usb/lp0` printed. Check a job goes through with the fixed filter; if it still hangs, try a USB quirk for `2730:1004` (e.g. `unidir`) in `/usr/share/cups/usb/`.
+4. Print from the iPhone and the Mac, then update this file and the reference doc.
+5. Later: the OKI can go on the same Pi as a second queue.
 
 ## Phase 3: OKI ML420
 
