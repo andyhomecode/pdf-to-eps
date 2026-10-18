@@ -48,6 +48,24 @@ PROFILES = {
         "default_codepage": "cp437",
         "cut": b'\x1b\x6d',  # ESC m partial cut; known to work on the TM-T20II
         "red": False,       # single-color thermal; red text prints bold
+        "bold_red": False,
+        "images": True,
+    },
+    # Unverified until it's connected: print tools/test_page.py and fix from what prints
+    "citizen-cd-s500a": {
+        "cols": 40,          # 76mm roll, per Citizen's spec sheets (33 on 69.5mm)
+        "dots": 0,           # text only, so no image width
+        "paper_pt": 215.43,  # 76mm paper width in points
+        "codepages": {
+            "cp437": ("cp437", 0),
+            "cp858": ("cp858", 19),
+            "latin-1": ("cp1252", 16),
+        },
+        "default_codepage": "cp437",
+        "cut": b'\x1d\x56\x01',  # GS V 1 partial cut (the A model has the autocutter)
+        "red": True,         # black/red ribbon (IR-31), ESC r 1
+        "bold_red": True,    # bold prints in red instead of bold
+        "images": False,     # text only: photos, drawings and images in PDFs are left out
     },
 }
 DEFAULT_PROFILE = "epson-tm-t20ii"
@@ -114,6 +132,8 @@ class Settings:
     print_mode: str     # auto: pages without text print as images
     dither: str
     embedded_images: bool
+    text_only: bool     # the profile prints no images
+    bold_red: bool      # bold prints in red (BoldInRed, on profiles with red)
 
 
 def bounded_int(value: Optional[str], default: int, lo: int, hi: int) -> int:
@@ -172,7 +192,7 @@ def resolve_settings(argv: List[str], env: Dict[str, str]) -> Settings:
     paper_pt = profile["paper_pt"]
     # A 58mm roll can't fit more than the profile's 58mm column count
     page_size = raw.get("PageSize") or raw.get("PageRegion") or raw.get("media") or ""
-    if "58" in page_size:
+    if "58" in page_size and "cols_58mm" in profile:
         cols = min(cols, profile["cols_58mm"])
         dots = profile["dots_58mm"]
         paper_pt = profile["paper_58mm_pt"]
@@ -183,6 +203,9 @@ def resolve_settings(argv: List[str], env: Dict[str, str]) -> Settings:
             log("WARNING", f"{name}={value!r} not one of {', '.join(allowed)}, using {allowed[0]}")
             return allowed[0]
         return value
+
+    def flag(name: str, default: bool) -> bool:
+        return raw.get(name, str(default)).lower() in ("true", "on", "yes", "1")
 
     codepage = raw.get("EscposCodepage", profile["default_codepage"]).lower()
     if codepage not in profile["codepages"]:
@@ -204,12 +227,14 @@ def resolve_settings(argv: List[str], env: Dict[str, str]) -> Settings:
         header=env.get("ESCPOS_HEADER", "")[:200],
         footer=env.get("ESCPOS_FOOTER", "")[:200],
         copies=bounded_int(argv[4] if len(argv) > 4 else None, 1, 1, MAX_COPIES),
-        print_title=raw.get("PrintTitle", "true").lower() in ("true", "on", "yes", "1"),
+        print_title=flag("PrintTitle", True),
         dots=dots,
         paper_pt=paper_pt,
-        print_mode=choice("PrintMode", PRINT_MODES),
+        print_mode=choice("PrintMode", PRINT_MODES) if profile["images"] else "text",
         dither=choice("Dither", DITHER_METHODS),
-        embedded_images=raw.get("EmbeddedImages", "true").lower() in ("true", "on", "yes", "1"),
+        embedded_images=profile["images"] and flag("EmbeddedImages", True),
+        text_only=not profile["images"],
+        bold_red=profile["red"] and flag("BoldInRed", profile["bold_red"]),
     )
 
 
@@ -318,6 +343,18 @@ def underline_on() -> bytes:
 def underline_off() -> bytes:
     return ESC + b'-' + b'\x00'
 
+def red_on() -> bytes:
+    return ESC + b'r' + b'\x01'
+
+def red_off() -> bytes:
+    return ESC + b'r' + b'\x00'
+
+def emphasis(on: bool, settings: Settings) -> bytes:
+    """Bold on or off, or red on a printer that prints bold in red."""
+    if settings.bold_red:
+        return red_on() if on else red_off()
+    return bold_on() if on else bold_off()
+
 def paper_cut(settings: Settings) -> bytes:
     """Paper cut using the profile's cut command"""
     return settings.profile["cut"]
@@ -348,7 +385,7 @@ def emit_line(line: str, settings: Settings) -> bytes:
     style_on = b''
     style_off = b''
     if line.startswith('[B]') and line.endswith('[/B]'):
-        style_on += bold_on(); style_off += bold_off()
+        style_on += emphasis(True, settings); style_off += emphasis(False, settings)
         line = line[3:-4]
     if line.startswith('[U]') and line.endswith('[/U]'):
         style_on += underline_on(); style_off += underline_off()
@@ -995,6 +1032,8 @@ def layout_pages(pages: List[Page], settings: Settings,
 
     previous_drawn = False
     for p in pages:
+        if settings.text_only and not p.segments:
+            continue  # nothing a text-only printer can print
         images: List[Box] = []
         if settings.embedded_images or not p.segments:
             images = useful_images(p)
@@ -1172,25 +1211,29 @@ def render_line(pl: PrintLine, settings: Settings) -> bytes:
     out += {"center": align_center(), "right": align_right()}.get(pl.align, align_left())
     if pl.size:
         out += ESC + b'!' + bytes([SIZE_MODE[pl.size]])
-    if pl.bold or (pl.red and not settings.profile["red"]):
+    # Red text prints red, or bold without red; bold prints red with bold_red
+    has_red = settings.profile["red"]
+    red = has_red and (pl.red or (pl.bold and settings.bold_red))
+    bold = (pl.bold and not settings.bold_red) or (pl.red and not has_red)
+    if bold:
         out += bold_on()
-    if pl.red and settings.profile["red"]:
-        out += ESC + b'r' + b'\x01'
-    if pl.spans:
+    if red:
+        out += red_on()
+    if pl.spans and not (bold or red):
         on = False
         for t, b in pl.spans:
             if b != on:
-                out += bold_on() if b else bold_off()
+                out += emphasis(b, settings)
                 on = b
             out += encode_text(t, settings)
         if on:
-            out += bold_off()
+            out += emphasis(False, settings)
         out += lf()
     else:
         out += encode_text(pl.text, settings) + lf()
-    if pl.red and settings.profile["red"]:
-        out += ESC + b'r' + b'\x00'
-    if pl.bold or pl.red:
+    if red:
+        out += red_off()
+    if bold:
         out += bold_off()
     if pl.size:
         out += ESC + b'!' + b'\x00'
@@ -1213,7 +1256,8 @@ def render_document(lines: List[PrintLine], title: str, settings: Settings) -> b
     out += init_seq(settings)
 
     if settings.header:
-        out += align_center() + bold_on() + encode_text(settings.header, settings) + bold_off() + lf()
+        out += (align_center() + emphasis(True, settings) + encode_text(settings.header, settings)
+                + emphasis(False, settings) + lf())
 
     # Optional title, wrapped to at most TITLE_MAX_LINES lines. Photos and
     # other image-only documents print just the image.
@@ -1539,6 +1583,10 @@ def main() -> None:
         with open(pdf_path, "rb") as f:
             magic = f.read(8)
         if magic.startswith((b"\xff\xd8\xff", b"\x89PNG")):
+            if settings.text_only:
+                log("INFO", f"{settings.profile_name} prints text only; image file not printed")
+                sys.stdout.buffer.write(notice("This printer prints text only.", settings))
+                sys.exit(0)
             lines = image_file_lines(pdf_path, settings)
         else:
             lines = extract_print_lines(pdf_path, settings)

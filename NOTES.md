@@ -5,10 +5,10 @@
 | Printer | Type | Connection | Queue | Status |
 |---|---|---|---|---|
 | Epson TM-T20II | Thermal receipt, 80mm, 203 dpi, autocutter | Ethernet, `socket://192.168.1.16:9100` (the "receipt" box on the LAN) | `thermal-receipt` (80mm, as drawn) and `thermal-receipt-text` (Letter, reflowed) | In use, shared over AirPrint |
-| Citizen CD-S500A | 9-pin impact receipt, ESC/POS, USB-B, probably 76mm paper, maybe a red/black ribbon | Not connected yet | `receipt-citizen` (planned) | Phase 2 |
+| Citizen CD-S500A | 9-pin impact receipt, ESC/POS, USB-B, 76mm paper (40 columns), black/red ribbon (IR-31) | USB-B into a Raspberry Pi 3 B running CUPS | `receipt-citizen` (Letter/A4, reflowed, text only, bold in red) | Phase 2: set up, not yet checked on the printer |
 | OKI ML420 | 9-pin dot matrix, Epson FX / IBM emulation (ESC/P, not ESC/POS), USB-B | Not connected yet | its own queue (planned) | Phase 3 |
 
-All queues run on the ThinkCentre (`/usr/lib/cups/filter/pdf2escpos.py`, PPDs in `ppd/`) and are shared over AirPrint, so iPhones and Macs print to them directly. How the server side is set up, and how to rebuild it, is in the ThinkCentre reference doc (`thinkcentre-reference.md` in Dropbox, section "Receipt Printer").
+The Epson queues run on the ThinkCentre and the Citizen's on the Pi (`/usr/lib/cups/filter/pdf2escpos.py`, PPDs in `ppd/`). All and are shared over AirPrint, so iPhones and Macs print to them directly. How the server side is set up, and how to rebuild it, is in the ThinkCentre reference doc (`thinkcentre-reference.md` in Dropbox, section "Receipt Printer").
 
 ## How a job reaches the printer
 
@@ -34,14 +34,16 @@ AirPrint doesn't show the custom menus (Columns, Character Set, Print Mode, Dith
 
 ## Phase 2: Citizen CD-S500A
 
-Connection: **USB-B straight into the ThinkCentre** if it can sit in the shoe room (URI from `lpinfo -v`, `usb://Citizen/...`). Otherwise use a **Raspberry Pi running `p910nd`** (raw port 9100, one port per printer, so the same Pi can drive the OKI too) with `socket://<pi>:9100`. The filter works the same either way.
+Decided 2026-10-17: the **Raspberry Pi 3 B is the Citizen's print server**, running its own CUPS, this filter and avahi, with the printer on its USB. `setup-pi.sh` sets it up. The printer is **text only** (no photos, drawings or images in PDFs; Andy wants it that way, and it means the `ESC *` image path never needs writing) and **bold prints red** instead of bold (`BoldInRed`, default on). Headings and red text in the PDF print red too.
 
-Checklist:
-1. Add a `citizen-cd-s500a` profile: impact, about 40 columns (to verify), `GS V` cut, `ESC r 1` for red, images as `ESC *` 8-dot bands with `ESC 3` line spacing, and a lower `image_gamma`. Images currently only support `GS v 0`, so the `ESC *` path has to be written.
-2. Create `ppd/citizen-cd-s500a.ppd` with `EscposProfile=citizen-cd-s500a`, then a `receipt-citizen` queue, shared over AirPrint.
-3. Add a calibration print (`PrintMode=Calibrate`): a column ruler for each font, a code page sample, bold, double-height and red samples, a dot-width ruler, the same photo with all three dither methods, then a cut.
-4. Fix the profile from what prints: column counts, dots, image density and band alignment, the cut command (some units have no autocutter, so fall back to a feed), and red.
-5. Print from the iPhone and the Mac, then update this file and the reference doc.
+- The PPD has Letter and A4 paper, like `thermal-receipt-text`, so phones lay out a normal page and the filter reflows it. It says it's a color device, so iOS keeps red text red in the PDF it sends.
+- Column count (40), the code page numbers, the `GS V 1` cut, `ESC r` red, and red switching mid-line all come from the CD-S500 family's spec sheets and ESC/POS, not from the printer.
+
+Still to do:
+1. Run `sudo ./setup-pi.sh` on the Pi with the printer plugged in. If no `usb://` URI shows up, the printer may present a serial port instead (`/dev/ttyACM0`).
+2. Print `tools/test_page.py --profile citizen-cd-s500a` raw, and fix the profile from what prints: where the ruler wraps (columns), red (whole line and mid-line), double sizes, which code pages print `é £ €` right, and the cut (fall back to a feed if it has no autocutter). The cutter sits further from the head than on the Epson, so `cut_feed_lines` may need raising.
+3. Print from the iPhone and the Mac, then update this file and the reference doc.
+4. Later: the OKI can go on the same Pi as a second queue.
 
 ## Phase 3: OKI ML420
 

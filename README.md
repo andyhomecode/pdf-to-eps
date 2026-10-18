@@ -6,7 +6,7 @@ It handles two kinds of document differently:
 - **Pages already laid out for the receipt** print **as drawn**. An iPhone or Mac lays out what it prints on the queue's 80mm page, so the PDF page is exactly the paper's width. The page is rendered 1:1 at 576 dots and matches the phone's print preview: its fonts, layout, logos (vector ones too), photos and QR codes. Text is thresholded so it stays crisp, and the page's photos are dithered.
 - **Other documents** (A4 or Letter PDFs) are read for their text, layout and fonts and printed as native printer text, reflowed to the 48-column roll. Images in them print in place, and pages without text print as images.
 
-It runs on the ThinkCentre server as the filter for the `thermal-receipt` queue. `NOTES.md` covers the printers, how they're connected and what's planned next.
+It runs on the ThinkCentre server as the filter for the `thermal-receipt` queue, and on a Raspberry Pi for the Citizen CD-S500A's `receipt-citizen` queue (text only, bold in red). `NOTES.md` covers the printers, how they're connected and what's planned next.
 
 ## What it does
 
@@ -36,12 +36,13 @@ Settings come from, lowest to highest priority: the printer profile, the PPD's d
 
 | PPD option | Values | Default |
 |---|---|---|
-| `EscposCols` (Columns) | 32, 42, 48 | 48 |
+| `EscposCols` (Columns) | 32, 42, 48. Citizen: 33, 40, 42 | 48. Citizen: 40 |
 | `EscposCodepage` (Character Set) | cp437, cp858, latin-1 | cp437 |
 | `PageSize` | Main queue: Receipt80mm, Receipt58mm (58mm caps columns at 35 and images at 416 dots). Text queue: Letter, A4 | Receipt80mm; Letter on the text queue |
 | `PrintMode` | Auto (receipt-width pages as drawn, others laid out as text), Text (lay out every page as text, reflowed), Image (every page as drawn) | Auto |
 | `Dither` | Auto, Atkinson, Floyd-Steinberg, Threshold | Auto |
 | `EmbeddedImages` (Print Images in Documents) | True, False | True |
+| `BoldInRed` (Print Bold in Red, Citizen only) | True (bold prints red, not bold), False | True |
 | `PrintTitle` | True, False | True |
 
 AirPrint clients (iPhone, Mac) only show standard options such as copies and Scaling. For their jobs, change a default on the CUPS web page: http://localhost:631/printers/thermal-receipt, Administration → Set Default Options. Linux print dialogs show the menus under Printer Options, and `lp -o Name=Value` sets them per job.
@@ -55,7 +56,7 @@ The `PROFILES` dict at the top of `pdf2escpos.py` holds what differs between pri
 | Profile | Printer | Status |
 |---|---|---|
 | `epson-tm-t20ii` | Epson TM-T20II thermal, 80mm, 203 dpi | In use |
-| `citizen-cd-s500a` | Citizen CD-S500A impact, red/black ribbon | Planned (see NOTES.md) |
+| `citizen-cd-s500a` | Citizen CD-S500A impact, red/black ribbon. Text only: images are left out, and `PrintMode`, `Dither` and `EmbeddedImages` don't apply | Set up on the Pi, not yet checked on the printer (see NOTES.md) |
 | `oki-ml420` | OKI ML420 dot matrix, ESC/P | Planned (see NOTES.md) |
 
 ## Install
@@ -88,6 +89,18 @@ sudo ./install.sh --rollback       # back to the previous filter and PPD
 
 The PPD sends `application/pdf`, `image/jpeg` and `image/png` straight to the filter. Images have to skip CUPS's own image filter, which would crop a photo to fill the long receipt page.
 
+### Citizen CD-S500A on a Raspberry Pi
+
+The Pi runs its own CUPS with this filter, and the printer plugs into it by USB. On Raspberry Pi OS, clone the repo and run:
+
+```bash
+sudo ./setup-pi.sh                 # installs CUPS, avahi and poppler, finds the printer, creates receipt-citizen
+sudo ./setup-pi.sh --uri 'usb://...'   # if it can't find the printer (URIs from lpinfo -v)
+python3 tools/test_page.py --profile citizen-cd-s500a | lp -d receipt-citizen -o raw
+```
+
+The queue has Letter and A4 paper, like `thermal-receipt-text`, so every document is reflowed as text to 40 columns. Bold text, headings and red text print red; photos print a "text only" notice. Running `setup-pi.sh` again (or `sudo ./install.sh --queue receipt-citizen`) updates the filter and PPD.
+
 ## Testing
 
 `tools/corpus.py` runs the filter over a folder of real documents (default `tests/private/`, which git ignores, for personal emails and tickets). It saves each one's decoded output and a picture of the printout, and with `--ref main` lists which documents print differently from that version. Run it before committing a layout change.
@@ -104,6 +117,9 @@ python3 tools/escpos_preview.py --png-dir /tmp/imgs out.escpos   # also save ima
 
 # Send it to the printer directly
 lp -d thermal-receipt -o raw out.escpos
+
+# A raw test page for a profile: column ruler, bold, red, sizes, code pages, cut
+python3 tools/test_page.py --profile citizen-cd-s500a | python3 tools/escpos_preview.py -
 ```
 
 Fixtures are in `tests/fixtures/`. `receipt.pdf` is built from `receipt.ps` with `ps2pdf`, and the image fixtures (including `email.pdf`, text with embedded images) come from `make_image_fixtures.py`. `sample-invoice.pdf` and `sample-textbook.pdf` are real-world layouts.

@@ -2,7 +2,7 @@
 # install.sh — install pdf2escpos.py, and the PPD on each receipt queue.
 #
 #   sudo ./install.sh                      # filter, and ppd/<queue>.ppd on both receipt queues
-#   sudo ./install.sh --queue receipt-citizen --ppd ppd/citizen-cd-s500a.ppd
+#   sudo ./install.sh --queue receipt-citizen   # the Citizen, on the Pi (ppd/receipt-citizen.ppd)
 #   sudo ./install.sh --filter-only        # leave the PPDs alone
 #   sudo ./install.sh --test some.pdf      # also send a test print (to the first queue)
 #   sudo ./install.sh --rollback           # put back the previous filter and PPDs

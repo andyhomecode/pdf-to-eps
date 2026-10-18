@@ -20,6 +20,7 @@ import escpos_preview  # noqa: E402
 FILTER = os.path.join(REPO, "pdf2escpos.py")
 PPD = os.path.join(REPO, "ppd", "thermal-receipt.ppd")
 TEXT_PPD = os.path.join(REPO, "ppd", "thermal-receipt-text.ppd")
+CITIZEN_PPD = os.path.join(REPO, "ppd", "receipt-citizen.ppd")
 FIXTURES = os.path.join(REPO, "tests", "fixtures")
 RECEIPT_PDF = os.path.join(FIXTURES, "receipt.pdf")
 INVOICE_PDF = os.path.join(FIXTURES, "sample-invoice.pdf")
@@ -181,10 +182,10 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn(b"Unable to extract text", r.stdout)
 
 
-def preview(path, options=""):
+def preview(path, options="", ppd=PPD):
     """Run the filter on a fixture and decode the output to tagged text."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("ESCPOS_")}
-    env["PPD"] = PPD
+    env["PPD"] = ppd
     out = subprocess.run([sys.executable, FILTER, "1", "andy", "Test", "1", options, path],
                          capture_output=True, env=env, timeout=60).stdout
     return escpos_preview.Decoder(out, "cp437", None).run()
@@ -457,3 +458,56 @@ class TestImages(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCitizen(unittest.TestCase):
+    def test_settings_from_ppd(self):
+        s = f.resolve_settings(argv(options="PrintMode=Image EmbeddedImages=True"), {"PPD": CITIZEN_PPD})
+        self.assertEqual((s.profile_name, s.cols, s.codepage_n), ("citizen-cd-s500a", 40, 0))
+        self.assertEqual((s.print_mode, s.embedded_images, s.text_only, s.bold_red),
+                         ("text", False, True, True))
+        s = f.resolve_settings(argv(options="BoldInRed=False"), {"PPD": CITIZEN_PPD})
+        self.assertFalse(s.bold_red)
+        # The Epson has no red, so bold stays bold
+        self.assertFalse(f.resolve_settings(argv(options="BoldInRed=True"), {"PPD": PPD}).bold_red)
+
+    def test_bold_prints_red(self):
+        text = preview(RECEIPT_PDF, ppd=CITIZEN_PPD)
+        self.assertIn("[MODE 2H 2W][RED]CORNER CAFE\n[/RED]", text)
+        self.assertIn("[RED]Total" + " " * 30 + "$7.75\n[/RED]", text)
+        self.assertNotIn("[B]", text)
+        self.assertIn("[CUT partial]", text)  # GS V 1
+
+    def test_bold_words_print_red(self):
+        text = preview(NOTICE_PDF, ppd=CITIZEN_PPD)
+        self.assertIn("[RED]PLEASE TAKE NOTICE[/RED] that Special Meetings", text)
+        self.assertNotIn("[B]", text)
+        text = preview(NOTICE_PDF, "BoldInRed=False", ppd=CITIZEN_PPD)
+        self.assertIn("[B]PLEASE TAKE NOTICE[/B] that", text)
+        self.assertNotIn("[RED]", text)
+
+    def test_text_only(self):
+        text = preview(EMAIL_PDF, ppd=CITIZEN_PPD)
+        self.assertIn("See you soon!", text)
+        self.assertNotIn("[IMG", text)
+        self.assertIn("This PDF has no text to print.", preview(PHOTO_PDF, ppd=CITIZEN_PPD))
+        text = preview(os.path.join(FIXTURES, "rotated.jpg"), ppd=CITIZEN_PPD)
+        self.assertIn("This printer prints text only.", text)
+        self.assertNotIn("[IMG", text)
+
+    def test_ppd_paper_and_color(self):
+        # Letter/A4 so phones lay out a normal page to reflow, and a color
+        # device so iOS keeps red text red in the PDF it sends
+        with open(CITIZEN_PPD, encoding="latin-1") as fh:
+            ppd = fh.read()
+        self.assertEqual(f.read_ppd_defaults(CITIZEN_PPD)["PageSize"], "Letter")
+        self.assertIn("*ColorDevice: True", ppd)
+        self.assertNotIn("Dither", ppd)
+
+    def test_test_page(self):
+        import test_page
+        text = escpos_preview.Decoder(test_page.test_page("citizen-cd-s500a"), "cp437", None).run()
+        self.assertIn("[RED]Red (ESC r 1)\n[/RED]", text)
+        self.assertIn("....:....1....:....2....:....3....:....4....:...\n", text)
+        self.assertTrue(text.rstrip().endswith("[CUT partial]"))
+        self.assertNotIn("[?", text)
