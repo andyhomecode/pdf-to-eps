@@ -64,7 +64,7 @@ Still to do:
 1. ~~Run `setup-pi.sh` and create `receipt-citizen`~~ (done 2026-10-18).
 2. ~~Check the test page and fix the profile~~ (done 2026-10-18, results above). The first receipt sent straight to `/dev/usb/lp0` printed right: 40 columns, red heading and total.
 3. ~~Print through CUPS~~ (done 2026-10-18, see "USB connection" below).
-4. ~~Print from the iPhone~~ (an email printed right over AirPrint, 2026-10-18). Still to do: print from the Mac, and add the Pi to the reference doc.
+4. ~~Print from the iPhone~~ (an email printed right over AirPrint, 2026-10-18). Still to do: print from the Mac. The Pi is in the reference doc (Receipt Printer section, 2026-10-18).
 5. Later: the OKI can go on the same Pi as a second queue.
 
 ## Phase 3: OKI ML420
