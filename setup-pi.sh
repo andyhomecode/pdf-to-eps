@@ -7,7 +7,13 @@
 #   sudo ./setup-pi.sh --uri URI       # use this device URI instead (from lpinfo -v)
 #
 # Running it again updates the filter and PPD, keeping the queue's defaults
-# (the same as sudo ./install.sh --queue receipt-citizen).
+# (the same as sudo ./install.sh --queue receipt-citizen). It also moves a
+# queue still on a usb:// URI to the kernel's /dev/usb/lp device.
+#
+# The queue prints to parallel:/dev/usb/lpN, not usb://CBM/CD-S500. CUPS's
+# usb backend hangs writing to this printer on the Pi (even with the unidir
+# quirk) and leaves it unable to take data until it's switched off and on.
+# Writing through the kernel's usblp driver works.
 
 set -euo pipefail
 
@@ -45,8 +51,24 @@ if [ -n "${SUDO_USER:-}" ]; then
     usermod -aG lpadmin "$SUDO_USER"
 fi
 
+# The Citizen's usblp device, found by its USB vendor ID (Citizen Systems)
+citizen_lp() {
+    local dev
+    for dev in /sys/class/usbmisc/lp*; do
+        [ -e "$dev" ] || continue
+        if [ "$(cat "$dev/device/../idVendor" 2>/dev/null)" = 2730 ]; then
+            echo "parallel:/dev/usb/$(basename "$dev")"
+            return
+        fi
+    done
+}
+
 if lpstat -p "$QUEUE" >/dev/null 2>&1; then
     ./install.sh --queue "$QUEUE"
+    if lpstat -v "$QUEUE" | grep -q ' usb://' && [ -n "$(citizen_lp)" ]; then
+        lpadmin -p "$QUEUE" -v "$(citizen_lp)"
+        echo "Moved $QUEUE to $(citizen_lp)"
+    fi
     exit 0
 fi
 
@@ -59,13 +81,13 @@ cupstestppd -W translations "$PPD" >/dev/null || {
 }
 
 if [ -z "$URI" ]; then
-    # The CD-S500A reports itself as CBM (Citizen Business Machines): usb://CBM/CD-S500
-    URI=$(lpinfo --include-schemes usb -v | awk 'tolower($2) ~ /^usb:\/\/(citizen|cbm)\// { print $2; exit }')
+    URI=$(citizen_lp)
 fi
 if [ -z "$URI" ]; then
-    echo "No Citizen printer found on USB. Is it on and plugged in? USB printers seen:" >&2
+    echo "No Citizen printer found on USB (no /dev/usb/lp* with vendor 2730). Is it on and plugged in? USB printers seen:" >&2
+    ls -l /dev/usb/lp* >&2 || true
     lpinfo --include-schemes usb -v >&2 || true
-    echo "Pick its URI and run: sudo ./setup-pi.sh --uri 'usb://...'" >&2
+    echo "Pick its device and run: sudo ./setup-pi.sh --uri 'parallel:/dev/usb/lp0'" >&2
     echo "(If it's missing, it may show up as a serial port: ls /dev/ttyACM* /dev/ttyUSB*" >&2
     echo " and then use --uri 'serial:/dev/ttyACM0?baud=9600'.)" >&2
     exit 1

@@ -56,7 +56,7 @@ The `PROFILES` dict at the top of `pdf2escpos.py` holds what differs between pri
 | Profile | Printer | Status |
 |---|---|---|
 | `epson-tm-t20ii` | Epson TM-T20II thermal, 80mm, 203 dpi | In use |
-| `citizen-cd-s500a` | Citizen CD-S500A impact, red/black ribbon, no cutter (jobs end with a feed to tear off), 40 columns in Font B, € prints as EUR. Text only: images are left out, and `PrintMode`, `Dither` and `EmbeddedImages` don't apply | Set up on the Pi, test page checked; phones and feed length still to check (see NOTES.md) |
+| `citizen-cd-s500a` | Citizen CD-S500A impact, red/black ribbon, no cutter (jobs end with a feed to tear off), 40 columns in Font B, € prints as EUR. Text only: images are left out, and `PrintMode`, `Dither` and `EmbeddedImages` don't apply | In use on the Pi, prints from the iPhone (see NOTES.md) |
 | `oki-ml420` | OKI ML420 dot matrix, ESC/P | Planned (see NOTES.md) |
 
 ## Install
@@ -95,11 +95,11 @@ The Pi (`printserver-citizen`) runs its own CUPS with this filter, and the print
 
 ```bash
 sudo ./setup-pi.sh                 # installs CUPS, avahi and poppler, finds the printer, creates receipt-citizen
-sudo ./setup-pi.sh --uri 'usb://...'   # if it can't find the printer (URIs from lpinfo -v)
+sudo ./setup-pi.sh --uri 'parallel:/dev/usb/lp0'   # if it can't find the printer
 python3 tools/test_page.py --profile citizen-cd-s500a | lp -d receipt-citizen -o raw
 ```
 
-The queue has Letter and A4 paper, like `thermal-receipt-text`, so every document is reflowed as text to 40 columns. Bold text, headings and red text print red; photos print a "text only" notice. Running `setup-pi.sh` again (or `sudo ./install.sh --queue receipt-citizen`) updates the filter and PPD. Its defaults are on http://printserver-citizen.local:631/printers/receipt-citizen (Administration → Set Default Options).
+The queue prints through the kernel's USB printer driver (`parallel:/dev/usb/lp0`) because CUPS's own `usb://` backend hangs on this printer; NOTES.md has the details. The queue has Letter and A4 paper, like `thermal-receipt-text`, so every document is reflowed as text to 40 columns. Bold text, headings and red text print red; photos print a "text only" notice. Running `setup-pi.sh` again (or `sudo ./install.sh --queue receipt-citizen`) updates the filter and PPD. Its defaults are on http://printserver-citizen.local:631/printers/receipt-citizen (Administration → Set Default Options).
 
 ## Testing
 

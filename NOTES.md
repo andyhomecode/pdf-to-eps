@@ -5,7 +5,7 @@
 | Printer | Type | Connection | Queue | Status |
 |---|---|---|---|---|
 | Epson TM-T20II | Thermal receipt, 80mm, 203 dpi, autocutter | Ethernet, `socket://192.168.1.16:9100` (the "receipt" box on the LAN) | `thermal-receipt` (80mm, as drawn) and `thermal-receipt-text` (Letter, reflowed) | In use, shared over AirPrint |
-| Citizen CD-S500A | 9-pin impact receipt, ESC/POS, USB-B, 76mm paper (40 columns), black/red ribbon (IR-31), no cutter | USB-B into a Raspberry Pi 3 B running CUPS (`printserver-citizen`) | `receipt-citizen` (Letter/A4, reflowed, text only, bold in red) | Phase 2: queue set up on the Pi, test page checked |
+| Citizen CD-S500A | 9-pin impact receipt, ESC/POS, USB-B, 76mm paper (40 columns), black/red ribbon (IR-31), no cutter | USB-B into a Raspberry Pi 3 B running CUPS (`printserver-citizen`) | `receipt-citizen` (Letter/A4, reflowed, text only, bold in red) | In use: prints from the iPhone over AirPrint (2026-10-18) |
 | OKI ML420 | 9-pin dot matrix, Epson FX / IBM emulation (ESC/P, not ESC/POS), USB-B | Not connected yet | its own queue (planned) | Phase 3 |
 
 The Epson queues run on the ThinkCentre and the Citizen's on the Pi `printserver-citizen` (`/usr/lib/cups/filter/pdf2escpos.py`, PPDs in `ppd/`). All are shared over AirPrint, so iPhones and Macs print to them directly. How the server side is set up, and how to rebuild it, is in the ThinkCentre reference doc (`thinkcentre-reference.md` in Dropbox, section "Receipt Printer").
@@ -48,16 +48,23 @@ The Pi so far (2026-10-18):
 - Hostname `printserver-citizen`, reached as `printserver-citizen.local` over mDNS (192.168.1.29 on 2026-10-18). Its CUPS page is http://printserver-citizen.local:631.
 - SSH as `andy@printserver-citizen.local`, public-key login only, from `andy-thinkpad`'s key.
 - git is installed, with the Pi's own SSH key added to GitHub, and this repo is cloned on it.
-- The printer shows up as a USB printer: `lsusb` gives `2730:1004 Citizen PPU-700` (interface board IF-USB-P03, interface class 7 Printer) and `/dev/usb/lp0` exists. CUPS lists it as `usb://CBM/CD-S500` (CBM is Citizen Business Machines), not a serial port.
+- The printer shows up as a USB printer: `lsusb` gives `2730:1004 Citizen PPU-700` (interface board IF-USB-P03, interface class 7 Printer) and `/dev/usb/lp0` exists. CUPS lists it as `usb://CBM/CD-S500` (CBM is Citizen Business Machines), not a serial port, but the queue doesn't use that URI (see below).
 - The first `sudo ./setup-pi.sh` installed CUPS, avahi and poppler but didn't find the printer, because it only looked for `usb://Citizen...`. It now accepts `usb://CBM/...` too. Rerun with `--uri 'usb://CBM/CD-S500'`, it created `receipt-citizen`, and the test page printed.
 
 To update it after a change: `ssh -t andy@printserver-citizen.local`, `cd` into the clone, `git pull`, then `sudo ./setup-pi.sh` (it updates the filter and PPD and keeps the queue's defaults).
 
+USB connection (2026-10-18): **the queue prints to `parallel:/dev/usb/lp0`, the kernel's usblp driver, not `usb://CBM/CD-S500`.**
+- On `usb://`, jobs hung at "Sending data to printer": the filter's output was read, but CUPS's usb backend (libusb) never finished writing it. A `0x2730 0x1004 unidir delay-close` quirk in `/usr/share/cups/usb/` (as CUPS has for the Citizen CT-S4000) switched the back channel off and still hung, so it was removed. Killing the stuck backend left a `dwc_otg ... Timed out waiting for FSM NP transfer` in dmesg, and the printer took no data on any path until it was switched off and on.
+- Through `/dev/usb/lp0` (the `parallel` backend), the receipt, the notice and a raw test page printed back to back, each in about a second.
+- `setup-pi.sh` finds the Citizen's `/dev/usb/lpN` by its USB vendor ID (2730) and moves a queue still on `usb://` to it. The number could change if a second USB printer (the OKI) is plugged in; a udev symlink would pin it then.
+- If the printer is off when a job is sent, the `parallel` backend gets an I/O error but exits as if it succeeded, so CUPS marks the job completed and it's lost. Send it again.
+- If a job ever sticks at "Sending data" again: switch the printer off and on. If `/dev/usb/lp0` is missing, `echo 1-1.2:1.0 | sudo tee /sys/bus/usb/drivers/usblp/bind` reattaches the driver (the usb backend detaches it while it runs).
+
 Still to do:
 1. ~~Run `setup-pi.sh` and create `receipt-citizen`~~ (done 2026-10-18).
 2. ~~Check the test page and fix the profile~~ (done 2026-10-18, results above). The first receipt sent straight to `/dev/usb/lp0` printed right: 40 columns, red heading and total.
-3. Print through CUPS: on 2026-10-18 job `receipt-citizen-2` sat at "Sending data to printer" and printed nothing, while the same bytes written to `/dev/usb/lp0` printed. Check a job goes through with the fixed filter; if it still hangs, try a USB quirk for `2730:1004` (e.g. `unidir`) in `/usr/share/cups/usb/`.
-4. Print from the iPhone and the Mac, then update this file and the reference doc.
+3. ~~Print through CUPS~~ (done 2026-10-18, see "USB connection" below).
+4. ~~Print from the iPhone~~ (an email printed right over AirPrint, 2026-10-18). Still to do: print from the Mac, and add the Pi to the reference doc.
 5. Later: the OKI can go on the same Pi as a second queue.
 
 ## Phase 3: OKI ML420
