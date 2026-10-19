@@ -30,6 +30,7 @@ QR_PDF = os.path.join(FIXTURES, "qr.pdf")
 EMAIL_PDF = os.path.join(FIXTURES, "email.pdf")
 NOTICE_PDF = os.path.join(FIXTURES, "notice.pdf")
 WEBPAGE_PDF = os.path.join(FIXTURES, "webpage.pdf")
+NOTES_PDF = os.path.join(FIXTURES, "notes-mac.pdf")
 
 
 def argv(copies="1", options=""):
@@ -312,6 +313,16 @@ class TestLayout(unittest.TestCase):
         self.assertIn("enforcement efforts, you can also participate in\nour complaint program, which", text)
         self.assertIn("1. Questions and comments submitted by email\n   will be answered in ten business days.\n"
                       "2. Submissions are reviewed", text)
+
+    def test_nested_list(self):
+        # Apple Notes from a Mac: ● items with ○ items nested under one,
+        # each bullet a separate Menlo run left of its text
+        text = preview(NOTES_PDF, "PrintTitle=false PageSize=Letter")
+        self.assertIn("* sort through Nate's clothes\n  - toss\n  - donate\n", text)
+        self.assertIn("  - figure out where to put shit\n* TREADMILL", text)
+        # A nested item's wrapped lines hang under its text
+        para = f.Para([("○", False)] + [(w, False) for w in "aa bb cc".split()], "", False, False, 2, 8, 2)
+        self.assertEqual([pl.text for pl in para.lines()], ["  ○ aa", "    bb", "    cc"])
 
     def test_textbook(self):
         text = preview(TEXTBOOK_PDF)

@@ -262,7 +262,8 @@ CHAR_MAP = {
     "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-",
     "\u2015": "-", "\u2212": "-",
     "\u2022": "*", "\u2023": "*", "\u2043": "*", "\u25cf": "*", "\u25aa": "*",
-    "\u25e6": "*", "\uf0b7": "*", "\uf0a7": "*",  # last two: Symbol/Wingdings bullets
+    "\uf0b7": "*", "\uf0a7": "*",  # Symbol/Wingdings bullets
+    "\u25cb": "-", "\u25e6": "-",  # hollow bullets mark nested items
     "\u2026": "...",
     "\u00a0": " ", "\u202f": " ", "\u3000": " ",
     "\u3001": ",", "\uff0c": ",", "\u3002": ".",
@@ -505,7 +506,7 @@ VARIABLE_WEIGHT = re.compile(r"wght([0-9A-Fa-f]{5,8})")
 MARKERS = ("[CENTER]", "[LEFT]", "[RIGHT]", "[B]", "[U]", "[CUT]")
 PAGE_NUMBER = re.compile(r"^(page\s*)?\d{1,4}(\s*(of|/)\s*\d{1,4})?$", re.I)
 RULE = re.compile(r"^([-_=*~.]\s?){3,}$")
-BULLET = re.compile(r"^([*\u2022\u25cf\u25aa\u25e6\u2023\u2043\-\u2013]|\d{1,3}[.)]|[a-zA-Z][.)])\s+")
+BULLET = re.compile(r"^([*\u2022\u25cf\u25cb\u25a0\u25aa\u25e6\u2023\u2043\-\u2013]|\d{1,3}[.)]|[a-zA-Z][.)])\s+")
 PRICE = re.compile(r"^(?P<label>.*?\S)\s*(?:\.{2,}|_{2,}|\s{3,})\s*"
                    r"(?P<value>[-+]?[$\u20ac\u00a3]?\s?[-\d][\d,]*(?:\.\d+)?)$")
 
@@ -941,10 +942,13 @@ class Para:
     red: bool
     hang: int
     width: int
+    indent: int = 0  # nested list items
 
     def lines(self) -> List[PrintLine]:
         out = []
-        for spans in wrap_words(self.words, self.width, self.hang):
+        for spans in wrap_words(self.words, self.width - self.indent, self.hang):
+            if self.indent:
+                spans = [(" " * self.indent, False)] + spans
             inline = [] if self.bold or not any(b for _, b in spans) else spans
             out.append(PrintLine("".join(t for t, _ in spans), "left", self.bold, self.red, self.size,
                                  spans=inline))
@@ -981,6 +985,17 @@ def split_paragraphs(block: Block) -> List[List[Segment]]:
         else:
             paras[-1].append(s)
     return paras
+
+def list_levels(paras: List[List[Segment]]) -> List[int]:
+    """How deeply each paragraph is nested in a list: the number of bullet
+    positions further left than its own. Paragraphs that aren't items are 0."""
+    items = [p[0] for p in paras if BULLET.match(p[0].text)]
+    lefts: List[float] = []
+    for s in sorted(items, key=lambda s: s.left):
+        if not lefts or s.left - lefts[-1] > 1.5 * s.char_width:
+            lefts.append(s.left)
+    return [sum(left < p[0].left - 1.5 * p[0].char_width for left in lefts)
+            if BULLET.match(p[0].text) else 0 for p in paras]
 
 def fit_row(segs: List[Segment], width: int) -> List[Tuple[str, int]]:
     """Lay out segments that share a line: [(text, hang)]. Spread them across
@@ -1097,7 +1112,8 @@ def layout_pages(pages: List[Page], settings: Settings,
             lines: List[PrintLine] = []
             if b.kind == "prose":
                 paras = []
-                for para in split_paragraphs(b):
+                split = split_paragraphs(b)
+                for para, level in zip(split, list_levels(split)):
                     words = join_words(para)
                     text = " ".join(w for w, _ in words)
                     size, bold = size_style(max(s.size for s in para), body, text)
@@ -1106,7 +1122,7 @@ def layout_pages(pages: List[Page], settings: Settings,
                     # Mostly bold prints all bold; otherwise bold words stay bold
                     bold = bold or sum(len(w) for w, wb in words if wb) * 2 > len(text)
                     red = sum(len(s.text) for s in para if s.red) * 2 > len(text)
-                    paras.append(Para(words, size, bold, red, hang, width))
+                    paras.append(Para(words, size, bold, red, hang, width, 2 * level))
                 items.append((b.segs[0].top, b.segs[-1].bottom, paras))
                 continue
             else:
