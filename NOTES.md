@@ -5,7 +5,7 @@
 | Printer | Type | Connection | Queue | Status |
 |---|---|---|---|---|
 | Epson TM-T20II | Thermal receipt, 80mm, 203 dpi, autocutter | Ethernet, `socket://192.168.1.16:9100` (the "receipt" box on the LAN) | `thermal-receipt` (80mm, as drawn) and `thermal-receipt-text` (Letter, reflowed) | In use, shared over AirPrint |
-| Citizen CD-S500A | 9-pin impact receipt, ESC/POS, USB-B, 76mm paper (40 columns), black/red ribbon (IR-31), no cutter | USB-B into a Raspberry Pi 3 B running CUPS (`printserver-citizen`) | `receipt-citizen` (Letter/A4, reflowed, text only, bold in red) | In use: prints from the iPhone over AirPrint (2026-10-18) |
+| Citizen CD-S500A | 9-pin impact receipt, ESC/POS, USB-B, 76mm paper (40 columns), black/red ribbon (IR-31), no cutter | USB-B into a Raspberry Pi 3 B running CUPS (`printserver-citizen`) | `receipt-citizen` (Letter/A4, reflowed, text only, bold in red) | In use: prints from the iPhone (2026-10-18) and the Mac (2026-10-19) over AirPrint |
 | OKI ML420 | 9-pin dot matrix, Epson FX / IBM emulation (ESC/P, not ESC/POS), USB-B | Not connected yet | its own queue (planned) | Phase 3 |
 
 The Epson queues run on the ThinkCentre and the Citizen's on the Pi `printserver-citizen` (`/usr/lib/cups/filter/pdf2escpos.py`, PPDs in `ppd/`). All are shared over AirPrint, so iPhones and Macs print to them directly. How the server side is set up, and how to rebuild it, is in the ThinkCentre reference doc (`thinkcentre-reference.md` in Dropbox, section "Receipt Printer").
@@ -60,11 +60,18 @@ USB connection (2026-10-18): **the queue prints to `parallel:/dev/usb/lp0`, the 
 - If the printer is off when a job is sent, the `parallel` backend gets an I/O error but exits as if it succeeded, so CUPS marks the job completed and it's lost. Send it again.
 - If a job ever sticks at "Sending data" again: switch the printer off and on. If `/dev/usb/lp0` is missing, `echo 1-1.2:1.0 | sudo tee /sys/bus/usb/drivers/usblp/bind` reattaches the driver (the usb backend detaches it while it runs).
 
+Printing from Linux (`andy-thinkpad`, 2026-10-18): **use the queue `receipt-citizen` ("Citizen Receipt (Pi)"), not cups-browsed's `Citizen_Receipt_printserver_citizen`.**
+- cups-browsed makes that local queue (`implicitclass://`) from the Pi's Bonjour ad. After the ThinkPad rebooted with a job queued, cups-browsed disabled it ("Printer disappeared or cups-browsed shutdown"). Once re-enabled, jobs sat at "Processing", logging `No suitable destination host found by cups-browsed, retrying later` every minute, while the Pi sat idle and answered IPP. The job's `cups-browsed-dest-printer` option still held the previous job's number (`"141 ipps://..."` on job 142), so the backend never matched it. Restarting cups-browsed didn't fix it.
+- One job did get through that way, and it printed "This PDF has no text to print." cups-browsed had sent it over `ipps://` as `application/vnd.cups-pdf` (the ThinkPad's pdftopdf output). The same Mousepad PDF printed right when the filter was run by hand on it, on the ThinkPad and on the Pi, before and after pdftopdf. Where the text went missing wasn't found.
+- The fix was a permanent driverless queue, the same thing a Mac makes when the printer is added: `lpadmin -p receipt-citizen -E -v ipp://printserver-citizen.local:631/printers/receipt-citizen -m everywhere -D "Citizen Receipt (Pi)"`. It sends the PDF as `application/pdf`, the same path as the iPhone, and the stuck job printed right through it.
+- cups-browsed may keep recreating its own queue. Ignore it. Not tried: disabling cups-browsed, which would leave the GTK dialog to find the Pi over Bonjour with a CUPS temporary queue. It would also drop the cups-browsed queues for the Epson.
+- A Mac doesn't need any of this: it doesn't run cups-browsed, and adding the printer in System Settings (AirPrint) makes the same kind of queue. A Notes page printed from the Mac reflowed as text (2026-10-19), so macOS sends PDF, not URF raster.
+
 Still to do:
 1. ~~Run `setup-pi.sh` and create `receipt-citizen`~~ (done 2026-10-18).
 2. ~~Check the test page and fix the profile~~ (done 2026-10-18, results above). The first receipt sent straight to `/dev/usb/lp0` printed right: 40 columns, red heading and total.
 3. ~~Print through CUPS~~ (done 2026-10-18, see "USB connection" below).
-4. ~~Print from the iPhone~~ (an email printed right over AirPrint, 2026-10-18). Still to do: print from the Mac. The Pi is in the reference doc (Receipt Printer section, 2026-10-18).
+4. ~~Print from the iPhone, the ThinkPad and the Mac~~ (done). An email printed right from the iPhone over AirPrint (2026-10-18). The ThinkPad prints through the `receipt-citizen` queue (see "Printing from Linux" above). A Mac Notes list printed right on 2026-10-19, once nested items were fixed: Notes marks them with `○` (and a third level with `■`), which the filter didn't know as bullets, so they ran into the item above with each `○` printed as `?`. Nested items now print indented 2 columns per level, with `○`/`◦` as `-` (`tests/fixtures/notes-mac.pdf`). The Pi is in the reference doc (Receipt Printer section, 2026-10-18).
 5. Later: the OKI can go on the same Pi as a second queue.
 
 ## Phase 3: OKI ML420
